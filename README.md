@@ -1,3 +1,11 @@
+---
+title: Jarvis Voice Assistant
+sdk: docker
+emoji: 🎙️
+colorFrom: blue
+colorTo: indigo
+---
+
 # J.A.R.V.I.S AI Voice Assistant
 
 Production-grade voice assistant with browser-based AudioWorklet capture, energy-based VAD, Moonshine STT, Groq/Gemini LLM routing, Kokoro-ONNX TTS, and a 4-tool function-calling registry. Deployable to Hugging Face Spaces at $0 cost.
