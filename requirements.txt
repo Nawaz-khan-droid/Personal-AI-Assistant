@@ -1,0 +1,25 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+httpx>=0.27.0
+groq>=0.4.0
+google-genai>=0.1.0
+simpleeval>=0.9.13
+websockets>=12.0
+python-multipart>=0.0.6
+ddgs>=4.0.0  # formerly duckduckgo-search
+slowapi>=0.1.9
+
+# Moonshine STT
+useful-moonshine>=0.1.0
+
+# Kokoro-ONNX TTS
+kokoro-onnx>=0.1.0
+soundfile>=0.12.1
+
+# Retry resilience (429/timeout only)
+tenacity>=8.2.0
+
+# WebSocket transport for HF Spaces proxy
+wsproto>=1.2.0

@@ -1,0 +1,17 @@
+.env
+.env.local
+.env.*.local
+__pycache__/
+*.pyc
+assistant.log
+response_audio.mp3
+test.wav
+backend/static/upload_temp.*
+*.sqlite
+*.db
+.vscode/
+.idea/
+node_modules/
+dist/
+build/
+.DS_Store
