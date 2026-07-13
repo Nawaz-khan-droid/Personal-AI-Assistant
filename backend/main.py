@@ -1,377 +1,172 @@
 """
-JARVIS AI Voice Assistant - Main FastAPI Application
-
-Pipeline: Browser Mic -> WebSocket -> Moonshine STT -> Groq LLM / Gemini Fallback
-          -> Tool Registry -> Kokoro TTS -> WebSocket -> Browser Speakers
+JARVIS LiveKit Worker — v1.x API (livekit-agents >= 1.0)
+Uses AgentSession + Agent pattern (NOT the deprecated VoicePipelineAgent)
 """
-
-import json
 import os
-import time
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+
 import asyncio
+import json
 import logging
-from contextlib import asynccontextmanager
-from typing import Optional
 
-from fastapi import (
-    FastAPI, WebSocket, WebSocketDisconnect,
-    HTTPException, Request
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-
+from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli
+from livekit.agents.voice import Agent, AgentSession
+from livekit.plugins import openai as livekit_openai
+from backend.services.ai.livekit_stt import MoonshineSTT, MoonshineOptions
+from backend.services.ai.livekit_tts import KokoroTTS, KokoroOptions
+from backend.utils.logger import setup_logging
 from backend import config
-from backend.websocket_manager import manager as ws_manager
-from backend.utils.logger import setup_logging, get_logger
-from backend.utils.exceptions import JarvisBaseException, RateLimitError
+
+setup_logging()
+logger = logging.getLogger("jarvis.worker")
+
+PERSONA_VOICES = {
+    "JARVIS": "am_adam",
+    "VERONICA": "af_bella",
+}
+
+PERSONA_INSTRUCTIONS = {
+    "JARVIS": (
+        "You are JARVIS, a highly sophisticated, tactical personal AI operating core. "
+        "Speak with calm, deliberate, refined British clarity. Use dry, subtle wit when appropriate. "
+        "Address the operator as 'Sir'. Keep responses crisp and under 3 sentences. "
+        "Never output markdown, bullet points, or lists — speak naturally."
+    ),
+    "VERONICA": (
+        "You are Veronica, a sharp, confident AI companion. "
+        "Speak with warmth and precision. Be concise and helpful. "
+        "Never output markdown, bullet points, or lists — speak naturally."
+    ),
+}
 
 
-class WSRateLimiter:
-    """Per-IP rate limiter for WebSocket connections (separate from slowapi REST limiter)."""
-    def __init__(self, max_turns: int = 30, window_seconds: int = 60):
-        self.max_turns = max_turns
-        self.window = window_seconds
-        self._buckets: dict = {}
-
-    def check(self, ip: str):
-        now = time.time()
-        bucket = self._buckets.get(ip)
-        if bucket:
-            ts, count = bucket
-            if now - ts < self.window:
-                if count >= self.max_turns:
-                    retry_after = int(self.window - (now - ts))
-                    raise RateLimitError(retry_after)
-                self._buckets[ip] = (ts, count + 1)
-            else:
-                self._buckets[ip] = (now, 1)
-        else:
-            self._buckets[ip] = (now, 1)
-from backend.services.ai.llm_service import llm_service
-from backend.services.ai.stt_service import stt_service
-from backend.services.ai.tts_service import tts_service
-from backend.services.ai.voice_service import voice_service
-
-setup_logging(log_level=config.LOG_LEVEL, log_file=config.LOG_FILE)
-logger = get_logger(__name__)
-
-limiter = Limiter(key_func=get_remote_address)
+def prewarm(proc: JobProcess):
+    """Prewarm: load heavy ONNX models once before accepting jobs."""
+    logger.info("Prewarming STT and TTS models...")
+    proc.userdata["stt"] = MoonshineSTT(MoonshineOptions(model_name="tiny"))
+    proc.userdata["tts"] = KokoroTTS(KokoroOptions(
+        model_path="backend/static/kokoro-v1.0.int8.onnx",
+        voices_path="backend/static/voices-v1.0.bin",
+        voice="am_adam",
+        lang="en-us"
+    ))
+    logger.info("Models prewarmed successfully.")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("JARVIS backend starting up...")
-    app.state.ws_rate_limiter = WSRateLimiter()
-    os.makedirs("backend/static", exist_ok=True)
+async def _send_transcript(ctx: JobContext, role: str, text: str):
+    """Send transcript to UI via LiveKit data channel."""
     try:
-        app.state.model_health_snapshot = await llm_service.probe_gemini_models()
-    except Exception as e:
-        logger.warning(f"LLM startup probe failed: {e}")
-        app.state.model_health_snapshot = {"status": "Not Found", "error": str(e)}
-    yield
-    logger.info("JARVIS backend shutting down...")
-
-
-app = FastAPI(
-    title="JARVIS AI Voice Assistant",
-    description="Voice assistant with Moonshine STT, Groq/Gemini LLM, Kokoro TTS",
-    version="2.0.0",
-    lifespan=lifespan,
-)
-
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=config.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve static files (Kokoro model weights, legacy audio)
-os.makedirs("backend/static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="backend/static"), name="static")
-
-# Serve Next.js static build (frontend) if it exists
-next_out = os.path.join(os.path.dirname(os.path.dirname(__file__)), "client", "out") if "__file__" in dir() else "client/out"
-if os.path.isdir(next_out):
-    app.mount("/", StaticFiles(directory=next_out, html=True), name="frontend")
-
-
-# ============================================================================
-# HEALTH & ROOT
-# ============================================================================
-
-@app.get("/health")
-async def health_check():
-    model_health = llm_service.get_model_health_snapshot() or getattr(app.state, "model_health_snapshot", {})
-    return {
-        "status": "healthy",
-        "version": "2.0.0",
-        "active_connections": ws_manager.get_active_count(),
-        "llm": {
-            "provider": "groq+gemini",
-            "status": model_health.get("status", "unknown"),
-        },
-        "stt": "moonshine" if stt_service.is_available() else "unavailable",
-        "tts": "kokoro" if tts_service.is_available() else "unavailable",
-    }
-
-
-@app.get("/")
-async def root():
-    return {
-        "name": "JARVIS AI Voice Assistant",
-        "version": "2.0.0",
-        "endpoints": {
-            "websocket": "/ws",
-            "health": "/health",
-            "rest_chat": "/api/chat",
-        },
-    }
-
-
-# ============================================================================
-# WEBSOCKET - Full Voice Pipeline: Mic -> STT -> LLM -> TTS -> Speaker
-# ============================================================================
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    session_id = None
-
-    try:
-        session_id = await ws_manager.connect(websocket)
-    except Exception as e:
-        logger.error(f"Failed to accept WS connection: {e}")
-        return
-
-    logger.info(f"WebSocket connected: {session_id}")
-
-    # Per-IP rate limit check (protects API key quotas from bot abuse)
-    client_ip = websocket.client.host if websocket.client else "unknown"
-    if hasattr(app.state, 'ws_rate_limiter'):
-        app.state.ws_rate_limiter.check(client_ip)
-
-    # Session state
-    MAX_AUDIO_BUFFER = 320000  # ~10s at 16kHz 16-bit mono
-    MAX_HISTORY_TURNS = 20     # prevents unbounded memory + token growth
-    audio_buffer = bytearray()
-    session_history = []
-    min_audio_bytes = 2048
-
-    # Voice state is managed centrally by voice_service
-    voice_service.select_preset("am_adam")
-
-    SYSTEM_PROMPT = (
-        "You are JARVIS, a voice-first AI assistant. "
-        "Respond concisely in 1-3 sentences (output is read aloud via TTS). "
-        "You have 4 tools available. Use them rather than guessing:\n"
-        "  - get_current_time(timezone): IANA timezone like 'America/New_York'. Default UTC.\n"
-        "  - get_weather(location): City name like 'London'. Returns conditions, temp, humidity, wind.\n"
-        "  - calculate(expression): Math expression like '(15 + 3) * 2'. Safe evaluator.\n"
-        "  - web_search(query): DuckDuckGo search for recent/unknown info.\n"
-        "Rules: Always call the tool when the question matches its domain. "
-        "After receiving the tool result, present it conversationally. "
-        "Never fabricate weather, time, calculations, or search results."
-    )
-
-    try:
-        while True:
-            message = await websocket.receive()
-
-            # --- JSON CONTROL MESSAGES ---
-            if "text" in message:
-                try:
-                    data = json.loads(message["text"])
-                    msg_type = data.get("type", "")
-
-                    if msg_type == "set_voice":
-                        voice_service.select_preset(data.get("voice_id", "am_adam"))
-
-                    elif msg_type == "set_voice_profile":
-                        mode = data.get("mode", "preset")
-                        if mode == "preset":
-                            voice_service.select_preset(data.get("voice_id", "am_adam"))
-                        elif mode == "mix":
-                            voice_service.blend(
-                                data.get("base_voice", "am_adam"),
-                                data.get("mod_voice", "am_michael"),
-                                float(data.get("alpha", 0.5)),
-                            )
-
-                    elif msg_type == "save_custom_mix":
-                        path = voice_service.save_custom(
-                            data.get("name", "custom_voice"),
-                            data.get("base_voice", "am_adam"),
-                            data.get("mod_voice", "am_michael"),
-                            float(data.get("alpha", 0.5)),
-                        )
-                        await ws_manager.send_message(session_id, {
-                            "type": "custom_voice_saved",
-                            "name": data.get("name", "custom_voice"),
-                            "path": path,
-                        })
-
-                    elif msg_type == "trigger_preview":
-                        preview_text = data.get("text", "System tuning complete. Matrix online.")
-                        async def _send_preview(data: bytes):
-                            await ws_manager.send_bytes(session_id, data)
-                        await tts_service.stream_speech(
-                            preview_text, voice_service.get_active_voice(), _send_preview
-                        )
-
-                    elif msg_type == "update_voice_blend":
-                        logger.info(f"Voice blend: {data.get('alpha')}")
-
-                    elif msg_type == "speech_ended":
-                        audio_buffer.clear()
-
-                    elif msg_type == "clear_history":
-                        session_history.clear()
-                        await ws_manager.send_message(session_id, {
-                            "type": "history_cleared"
-                        })
-
-                    elif msg_type == "text_message":
-                        user_text = data.get("content", "")
-                        await ws_manager.send_message(session_id, {
-                            "type": "thinking", "status": "Processing..."
-                        })
-                        reply = await llm_service.chat_complete(
-                            session_history + [{"role": "user", "content": user_text}],
-                            system_prompt=SYSTEM_PROMPT,
-                            tools=llm_service.tools_schema,
-                        )
-                        session_history.append({"role": "user", "content": user_text})
-                        session_history.append({"role": "assistant", "content": reply})
-                        if len(session_history) > MAX_HISTORY_TURNS * 2:
-                            session_history = session_history[-(MAX_HISTORY_TURNS * 2):]
-                        await ws_manager.send_message(session_id, {
-                            "type": "bot_response_text", "text": reply
-                        })
-                        async def _send_audio(data: bytes):
-                            await ws_manager.send_bytes(session_id, data)
-                        await tts_service.stream_speech(
-                            reply, voice_service.get_active_voice(), _send_audio
-                        )
-
-                    elif msg_type == "ping":
-                        await ws_manager.send_message(session_id, {
-                            "type": "pong",
-                            "timestamp": data.get("timestamp"),
-                        })
-
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON from {session_id}")
-
-            # --- BINARY AUDIO CHUNKS (raw PCM Int16 from browser mic) ---
-            elif "bytes" in message:
-                audio_buffer.extend(message["bytes"])
-                if len(audio_buffer) > MAX_AUDIO_BUFFER:
-                    audio_buffer = audio_buffer[-32000:]  # drop oldest ~1s
-                raw = bytes(audio_buffer)
-
-                if len(raw) < min_audio_bytes:
-                    continue
-
-                transcript = await stt_service.transcribe(raw)
-                if not transcript:
-                    continue
-
-                logger.info(f"STT: {transcript}")
-
-                await ws_manager.send_message(session_id, {
-                    "type": "stt_text", "text": transcript
-                })
-
-                reply = await llm_service.chat_complete(
-                    session_history + [{"role": "user", "content": transcript}],
-                    system_prompt=SYSTEM_PROMPT,
-                    tools=llm_service.tools_schema,
-                )
-
-                session_history.append({"role": "user", "content": transcript})
-                session_history.append({"role": "assistant", "content": reply})
-                if len(session_history) > MAX_HISTORY_TURNS * 2:
-                    session_history = session_history[-(MAX_HISTORY_TURNS * 2):]
-
-                await ws_manager.send_message(session_id, {
-                    "type": "bot_response_text", "text": reply
-                })
-
-                async def _send_audio_chunk(data: bytes):
-                    await ws_manager.send_bytes(session_id, data)
-                await tts_service.stream_speech(
-                    reply, voice_service.get_active_voice(), _send_audio_chunk
-                )
-
-                audio_buffer.clear()
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {session_id}")
-    except Exception as e:
-        logger.exception(f"WS error [{session_id}]: {e}")
-        try:
-            await ws_manager.send_message(session_id, {
-                "type": "error", "message": "Internal server error"
-            })
-        except Exception:
-            pass
-    finally:
-        if session_id:
-            await ws_manager.disconnect(session_id)
-
-
-# ============================================================================
-# REST ENDPOINTS (legacy compatibility)
-# ============================================================================
-
-@app.post("/api/chat")
-@limiter.limit("10/minute")
-async def chat_endpoint(request: Request, user_input: str):
-    try:
-        reply = await llm_service.chat_complete(
-            [{"role": "user", "content": user_input}],
-            tools=llm_service.tools_schema,
+        msg = json.dumps({"type": "transcript", "role": role, "text": text})
+        await ctx.room.local_participant.publish_data(
+            msg.encode("utf-8"), reliable=True
         )
-        return {"response": {"display_response": reply, "spoken_response": reply}}
     except Exception as e:
-        logger.exception(f"Chat error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Failed to send transcript: {e}")
 
 
-# ============================================================================
-# EXCEPTION HANDLERS
-# ============================================================================
+async def entrypoint(ctx: JobContext):
+    logger.info(f"Agent job started. Room: {ctx.room.name}")
 
-@app.exception_handler(JarvisBaseException)
-async def jarvis_exception_handler(request: Request, exc: JarvisBaseException):
-    status = 429 if isinstance(exc, RateLimitError) else 400
-    return JSONResponse(status_code=status, content={"error": exc.message, "code": exc.code})
+    groq_key = config.GROQ_API_KEY or os.environ.get("GROQ_API_KEY")
+    if not groq_key:
+        logger.warning("GROQ_API_KEY not set — LLM will fail to respond.")
 
-
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
-    logger.exception(f"Unhandled: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"error": "An unexpected system error occurred.", "code": "internal_error"},
+    llm_plugin = livekit_openai.LLM(
+        model="llama-3.3-70b-versatile",
+        api_key=groq_key,
+        base_url="https://api.groq.com/openai/v1"
     )
+
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    logger.info("Connected to LiveKit room.")
+
+    tts = ctx.proc.userdata["tts"]
+
+    session = AgentSession(
+        stt=ctx.proc.userdata["stt"],
+        llm=llm_plugin,
+        tts=tts,
+        vad=None,
+    )
+
+    current_persona = "JARVIS"
+    agent = Agent(instructions=PERSONA_INSTRUCTIONS[current_persona])
+
+    logger.info("Starting AgentSession...")
+    session.start(agent, room=ctx.room)
+
+    @ctx.room.on("data_received")
+    def on_data_received(data_msg):
+        try:
+            payload = json.loads(data_msg.data.decode("utf-8"))
+            msg_type = payload.get("type")
+
+            if msg_type == "persona_change":
+                persona = payload.get("persona", "JARVIS")
+                if persona in PERSONA_VOICES:
+                    current_persona = persona
+                    tts.opts.voice = PERSONA_VOICES[persona]
+                    preview = "At your service, Sir." if persona == "JARVIS" else "Hello, I'm Veronica."
+                    asyncio.create_task(session.say(preview, allow_interruptions=True))
+                    asyncio.create_task(_send_transcript(ctx, "agent", preview))
+                    logger.info(f"Persona changed to {persona}, voice={tts.opts.voice}")
+
+            elif msg_type == "chat":
+                text = payload.get("text", "").strip()
+                if text:
+                    asyncio.create_task(_handle_chat(ctx, session, llm_plugin, text))
+
+        except Exception as e:
+            logger.error(f"Error handling data message: {e}")
+
+    await session.say(
+        "Online, Sir. Systems are nominal. Awaiting your command.",
+        allow_interruptions=True
+    )
+    await _send_transcript(ctx, "agent", "Online, Sir. Systems are nominal. Awaiting your command.")
+    logger.info("Greeting sent. Agent is now active.")
+
+
+async def _handle_chat(ctx: JobContext, session, llm_plugin, text: str):
+    """Handle text chat: feed to LLM, speak response, send transcript."""
+    await _send_transcript(ctx, "user", text)
+    try:
+        import httpx
+        groq_key = config.GROQ_API_KEY or os.environ.get("GROQ_API_KEY")
+        if not groq_key:
+            resp_text = "I don't have an API key configured, Sir."
+        else:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}"},
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": "You are JARVIS. Keep responses under 3 sentences. Speak naturally, no markdown."},
+                            {"role": "user", "content": text},
+                        ],
+                        "max_tokens": 200,
+                    },
+                )
+                r.raise_for_status()
+                resp_text = r.json()["choices"][0]["message"]["content"]
+        await session.say(resp_text, allow_interruptions=True)
+        await _send_transcript(ctx, "agent", resp_text)
+    except Exception as e:
+        logger.error(f"Chat LLM error: {e}")
+        fallback = "I'm having trouble reaching my brain, Sir. Try again shortly."
+        await session.say(fallback, allow_interruptions=True)
+        await _send_transcript(ctx, "agent", fallback)
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "backend.main:app",
-        host=config.HOST,
-        port=config.PORT,
-        reload=config.ENVIRONMENT != "production",
-        log_level="info",
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
+            ws_url=os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880"),
+            initialize_process_timeout=30.0,
+        )
     )

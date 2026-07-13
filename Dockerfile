@@ -1,55 +1,57 @@
-# ============================================================
-# STAGE 1: Build Next.js frontend (static export)
-# ============================================================
-FROM node:20-alpine AS frontend-builder
-
-WORKDIR /build
-COPY client/package.json client/package-lock.json* ./
-RUN npm ci
-
-COPY client/ .
-RUN npm run build
-
-# ============================================================
-# STAGE 2: Python backend + frontend assets
-# ============================================================
 FROM python:3.10-slim
 
-WORKDIR /code
+WORKDIR /app
 
-# System deps — only what's needed at runtime
+# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libsndfile1 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    ffmpeg libsndfile1 curl && rm -rf /var/lib/apt/lists/*
+
+# LiveKit server (Linux amd64)
+RUN curl -sSL https://get.livekit.io | bash
 
 # Python deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-# Copy backend code
-COPY backend/ backend/
+# Application
+COPY backend/ /app/backend/
+COPY dev_server.py /app/dev_server.py
+COPY startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
 
-# Copy pre-built frontend from stage 1
-COPY --from=frontend-builder /build/out/ client/out/
-
-# Kokoro model download (configurable via build args)
-ARG KOKORO_MODEL_URL=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
-RUN python -c "
+# Download Kokoro quantized model (smaller, faster load)
+RUN mkdir -p /app/backend/static && python <<'EOF'
 import os, urllib.request
-base = os.environ.get('KOKORO_MODEL_URL', '$KOKORO_MODEL_URL')
-for f in ['kokoro-v1.0.onnx', 'voices-v1.0.bin']:
-    path = f'backend/static/{f}'
+base = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+for f in ["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"]:
+    path = f"/app/backend/static/{f}"
     if not os.path.exists(path):
-        print(f'Downloading {f}...')
-        urllib.request.urlretrieve(f'{base}/{f}', path)
-"
+        print(f"Downloading {f}...")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        urllib.request.urlretrieve(f"{base}/{f}", path)
+EOF
 
-# Hugging Face Spaces
+# Pre-cache Moonshine STT model (quantized if available, else float)
+RUN python <<'EOF'
+from huggingface_hub import hf_hub_download
+import os
+repo = "UsefulSensors/moonshine"
+# Try quantized first, fall back to float
+for subfolder in ["onnx/merged/tiny/int8", "onnx/merged/tiny/float"]:
+    try:
+        for f in ["encoder_model.onnx", "decoder_model_merged.onnx"]:
+            path = hf_hub_download(repo, f, subfolder=subfolder)
+            print(f"Cached {f}: {os.path.getsize(path)} bytes")
+        print(f"Using {subfolder} Moonshine model")
+        break
+    except Exception:
+        continue
+EOF
+
+WORKDIR /app
 EXPOSE 7860
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:7860/api/health || exit 1
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "7860", "--ws", "wsproto"]
+CMD ["bash", "startup.sh"]

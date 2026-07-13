@@ -13,6 +13,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from backend import config
 from backend.utils.exceptions import LLMError, RateLimitError, AIServiceError
+from backend.services.cache.response_cache import response_cache
 
 logger = logging.getLogger(__name__)
 
@@ -104,17 +105,35 @@ class LLMService:
         tools: Optional[List[Dict]] = None,
         provider: Optional[str] = None
     ) -> Union[str, AsyncGenerator[str, None]]:
+        # Check response cache for the last user message (simple single-turn caching)
+        last_user_msg = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and m.get("content"):
+                last_user_msg = m["content"]
+                break
+        if last_user_msg and not tools and not stream:
+            cached = response_cache.get(last_user_msg)
+            if cached is not None:
+                logger.info(f"Response cache HIT for: {last_user_msg!r}")
+                return cached
+
         await self.rate_limiter.acquire()
         merged_tools = tools if tools is not None else self.tools_schema
 
         try:
-            return await self._call_groq(messages, system_prompt, temperature, max_tokens, stream, merged_tools)
+            result = await self._call_groq(messages, system_prompt, temperature, max_tokens, stream, merged_tools)
+            # Cache the response if it's a simple text string (not a stream or tool call result)
+            if last_user_msg and isinstance(result, str) and not stream:
+                response_cache.set(last_user_msg, result)
+            return result
         except Exception as e:
             logger.warning(f"Groq primary failed after retries: {e}. Trying Gemini fallback...")
             try:
-                return await self._call_gemini(messages, system_prompt, temperature, max_tokens, stream)
+                return await self._call_gemini(messages, system_prompt, temperature, max_tokens, stream, merged_tools)
             except Exception as gemini_err:
-                raise LLMError(f"Both LLMs failed. Groq: {e} | Gemini: {gemini_err}")
+                logger.error(f"Both LLMs failed. Groq: {e} | Gemini: {gemini_err}")
+                # Return a polite offline fallback instead of crashing
+                return "I apologize, but I'm having trouble connecting to my language services right now. This may be due to rate limits or network issues. Please try again in a moment, or check that the API keys are configured correctly."
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
@@ -214,7 +233,8 @@ class LLMService:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
-        stream: bool = False
+        stream: bool = False,
+        tools: Optional[List[Dict]] = None
     ) -> Union[str, AsyncGenerator[str, None]]:
         client = self._get_gemini()
         gemini_messages = []
@@ -224,11 +244,47 @@ class LLMService:
                 gemini_messages.append({"role": role, "parts": [{"text": m["content"]}]})
 
         from google.genai import types as gemini_types
+        
+        gemini_tools = []
+        if tools:
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    # Map OpenAPI schema to Gemini FunctionDeclaration
+                    props = func.get("parameters", {}).get("properties", {})
+                    req = func.get("parameters", {}).get("required", [])
+                    
+                    schema_props = {}
+                    for k, v in props.items():
+                        t_str = v.get("type", "string").upper()
+                        if t_str == "NUMBER": t_str = "NUMBER"
+                        elif t_str == "INTEGER": t_str = "INTEGER"
+                        elif t_str == "BOOLEAN": t_str = "BOOLEAN"
+                        elif t_str == "ARRAY": t_str = "ARRAY"
+                        else: t_str = "STRING"
+                        schema_props[k] = gemini_types.Schema(
+                            type=getattr(gemini_types.Type, t_str, gemini_types.Type.STRING),
+                            description=v.get("description", "")
+                        )
+                    
+                    decl = gemini_types.FunctionDeclaration(
+                        name=func["name"],
+                        description=func.get("description", ""),
+                        parameters=gemini_types.Schema(
+                            type=gemini_types.Type.OBJECT,
+                            properties=schema_props,
+                            required=req if req else None
+                        ) if props else None
+                    )
+                    gemini_tools.append(gemini_types.Tool(function_declarations=[decl]))
+
         gen_config = gemini_types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=max_tokens,
             system_instruction=system_prompt,
+            tools=gemini_tools if gemini_tools else None
         )
+        
         response = await asyncio.to_thread(
             lambda: client.models.generate_content(
                 model=GEMINI_MODEL,
@@ -236,6 +292,44 @@ class LLMService:
                 config=gen_config,
             )
         )
+        
+        if response.function_calls:
+            from backend.services.tools import executor
+            
+            # Append the assistant's function call to history
+            fc_part = response.candidates[0].content.parts[0]
+            gemini_messages.append(gemini_types.Content(
+                role="model",
+                parts=[fc_part]
+            ))
+            
+            tool_responses = []
+            for fc in response.function_calls:
+                args = {k: v for k, v in fc.args.items()} if fc.args else {}
+                logger.info(f"Gemini executing tool: {fc.name} with args: {args}")
+                result = await executor.execute_tool(fc.name, args)
+                
+                tool_responses.append(
+                    gemini_types.Part.from_function_response(
+                        name=fc.name,
+                        response={"result": result}
+                    )
+                )
+            
+            gemini_messages.append(gemini_types.Content(
+                role="user",
+                parts=tool_responses
+            ))
+            
+            second_response = await asyncio.to_thread(
+                lambda: client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=gemini_messages,
+                    config=gen_config,
+                )
+            )
+            return second_response.text
+
         return response.text
 
     async def _stream_groq(self, response) -> AsyncGenerator[str, None]:
