@@ -5,8 +5,31 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import random
 import logging
+import json
+import time
+from pathlib import Path
 from livekit import api
 from core.config import settings
+
+# Structured JSON logging
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_obj = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_obj["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+logger = logging.getLogger("jarvis-server")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
 
 app = FastAPI(title="Jarvis Token Server")
 
@@ -18,6 +41,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def audit_and_timing_middleware(request, call_next):
+    start_time = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start_time
+    logger.info(f"Audit: {request.method} {request.url.path} - Status: {response.status_code} - Timing: {duration:.3f}s")
+    return response
 
 class TokenRequest(BaseModel):
     password: str
@@ -55,6 +86,8 @@ async def get_token(request: TokenRequest):
     .with_grants(api.VideoGrants(
         room_join=True,
         room=dynamic_room_name,
+        can_publish=True,
+        can_subscribe=True,
     ))
     
     # Monkeypatch to fix 15-hour Windows clock skew issue
@@ -62,10 +95,34 @@ async def get_token(request: TokenRequest):
     token.ttl = datetime.timedelta(days=2)
     return TokenResponse(token=token.to_jwt(), url=settings.livekit_url)
 
-# Mount the static frontend dist folder as the root UI
-# Note: This requires the frontend to be built (npm run build) and placed in frontend/dist
-if os.path.exists("frontend/dist"):
-    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="ui")
-else:
-    logger = logging.getLogger("jarvis-server")
-    logger.warning("frontend/dist directory not found. Starting API without static UI.")
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "livekit_url": settings.livekit_url}
+
+# Mount the static frontend dist folder as the root UI safely (SPA Catch-all)
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    dist_dir = Path("frontend/dist").resolve()
+    if not dist_dir.exists():
+        logger.warning("frontend/dist directory not found. Starting API without static UI.")
+        raise HTTPException(status_code=404, detail="UI not built")
+    
+    # Path traversal guard
+    requested_path = (dist_dir / full_path).resolve()
+    try:
+        requested_path.relative_to(dist_dir)
+    except ValueError:
+        logger.error(f"Path traversal attempt blocked: {full_path}")
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    if requested_path.is_file():
+        return FileResponse(requested_path)
+    
+    # Fallback for SPA client-side routing
+    index_path = dist_dir / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Not Found")

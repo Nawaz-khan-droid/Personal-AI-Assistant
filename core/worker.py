@@ -5,6 +5,10 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 # ───────────────────────────────────────────────────────────────────────
 
 import logging
+import json
+import time
+import asyncio
+from contextlib import contextmanager
 
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.voice import Agent, AgentSession
@@ -15,7 +19,81 @@ from profiles.jarvis_personal import JarvisPersonalProfile
 from services.fallback_stt import LocalMoonshineSTT
 from services.fallback_tts import LocalKokoroTTS
 
+# Clean up noisy libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("livekit").setLevel(logging.INFO)
+
+# Structured JSON logging
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_obj = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_obj["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
 logger = logging.getLogger("jarvis-worker")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
+
+@contextmanager
+def _timed(name):
+    start = time.monotonic()
+    yield
+    duration = time.monotonic() - start
+    logger.info(f"Pipeline Timing: {name} took {duration:.3f}s")
+
+class TokenBucketRateLimiter:
+    def __init__(self, rpm=25):
+        self.interval = 60.0 / rpm
+        self.last_call = 0.0
+        self.lock = asyncio.Lock()
+        
+    async def acquire(self):
+        async with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_call
+            if elapsed < self.interval:
+                await asyncio.sleep(self.interval - elapsed)
+            self.last_call = time.monotonic()
+
+class RateLimitedGroqLLM(groq.LLM):
+    def __init__(self, rpm=25, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._limiter = TokenBucketRateLimiter(rpm=rpm)
+        
+    def chat(self, *args, **kwargs):
+        original_stream = super().chat(*args, **kwargs)
+        
+        class RateLimitedStream(type(original_stream)):
+            def __init__(self, inner, limiter):
+                self.__dict__ = inner.__dict__.copy()
+                self._inner = inner
+                self._limiter = limiter
+                self._started = False
+                
+            def __aiter__(self):
+                return self
+                
+            async def __anext__(self):
+                if not getattr(self, '_started', False):
+                    await self._limiter.acquire()
+                    self._started = True
+                return await self._inner.__anext__()
+                
+            async def aclose(self):
+                if hasattr(self._inner, "aclose"):
+                    await self._inner.aclose()
+                    
+        return RateLimitedStream(original_stream, self._limiter)
 
 
 async def entrypoint(ctx: JobContext):
@@ -58,11 +136,11 @@ async def entrypoint(ctx: JobContext):
     local_stt = LocalMoonshineSTT()
     stt_plugin = stt.FallbackAdapter([dg_stt, local_stt], vad=vad_plugin)
 
-    # BRAIN: LLM Proxy Chain
-    groq_llm = openai.LLM(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=settings.groq_api_key,
-        model="llama-3.3-70b-versatile"
+    # BRAIN: LLM Proxy Chain (with Rate Limiting)
+    groq_llm = RateLimitedGroqLLM(
+        rpm=25,
+        model="llama-3.3-70b-versatile",
+        api_key=settings.groq_api_key
     )
     gemini_llm = openai.LLM(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -96,7 +174,10 @@ async def entrypoint(ctx: JobContext):
     )
     
     await session.start(agent=jarvis_agent, room=ctx.room, record=False)
-    await session.say(profile.greeting_message, allow_interruptions=True)
+    try:
+        await session.say(profile.greeting_message, allow_interruptions=True)
+    except Exception as e:
+        logger.error(f"Error speaking greeting: {e}")
 
 
 if __name__ == "__main__":

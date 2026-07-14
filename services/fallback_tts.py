@@ -20,7 +20,7 @@ class KokoroChunkedStream(tts.ChunkedStream):
         self._sample_rate = 24000
         self._num_channels = 1
 
-    async def _run(self):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Executed automatically in the background by LiveKit's stream manager."""
         loop = asyncio.get_running_loop()
         
@@ -49,13 +49,9 @@ class KokoroChunkedStream(tts.ChunkedStream):
             
             is_final = (i + bytes_per_chunk) >= len(pcm_bytes)
             
-            self._event_ch.send_nowait(
-                tts.SynthesizedAudio(
-                    request_id=self._request_id,
-                    frame=audio_frame,
-                    is_final=is_final
-                )
-            )
+            output_emitter.push(audio_frame)
+            
+        output_emitter.end_input()
 
     def _synthesize_sync(self, text: str) -> bytes:
         if not text.strip():
@@ -83,8 +79,8 @@ class LocalKokoroTTS(tts.TTS):
         self._voice_target = "am_adam" if self._persona == "jarvis" else "af_sarah"
         
         project_root = Path(__file__).parent.parent
-        model_path = project_root / "backend" / "static" / "kokoro-v1.0.int8.onnx"
-        voices_path = project_root / "backend" / "static" / "voices-v1.0.bin"
+        model_path = project_root / "core" / "static" / "kokoro-v1.0.int8.onnx"
+        voices_path = project_root / "core" / "static" / "voices-v1.0.bin"
 
         self._kokoro = Kokoro(str(model_path), str(voices_path))
         self._executor = ThreadPoolExecutor(max_workers=1)

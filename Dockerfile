@@ -14,17 +14,18 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Application
-COPY backend/ /app/backend/
-COPY dev_server.py /app/dev_server.py
+COPY core/ /app/core/
+COPY profiles/ /app/profiles/
+COPY services/ /app/services/
 COPY startup.sh /app/startup.sh
 RUN chmod +x /app/startup.sh
 
 # Download Kokoro quantized model (smaller, faster load)
-RUN mkdir -p /app/backend/static && python <<'EOF'
+RUN mkdir -p /app/core/static && python <<'EOF'
 import os, urllib.request
 base = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 for f in ["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"]:
-    path = f"/app/backend/static/{f}"
+    path = f"/app/core/static/{f}"
     if not os.path.exists(path):
         print(f"Downloading {f}...")
         os.makedirs(os.path.dirname(path), exist_ok=True)

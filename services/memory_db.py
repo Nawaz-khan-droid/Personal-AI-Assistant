@@ -9,7 +9,7 @@ class LocalMemoryDB:
     def __init__(self):
         # Resolve the absolute path to the static directory
         project_root = Path(__file__).parent.parent
-        db_dir = project_root / "backend" / "static"
+        db_dir = project_root / "core" / "static"
         db_dir.mkdir(parents=True, exist_ok=True)
         
         self.db_path = db_dir / "memory.db"

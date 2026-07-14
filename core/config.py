@@ -29,7 +29,6 @@ _REQUIRED: dict[str, str] = {
     "LIVEKIT_API_SECRET": "LiveKit Cloud API secret",
     "GROQ_API_KEY":      "Groq Cloud API key (primary STT + LLM)",
     "DEEPGRAM_API_KEY":  "Deepgram API key (primary TTS)",
-    "GEMINI_API_KEY":    "Google Gemini API key (LLM fallback — mandatory at boot)",
 }
 
 

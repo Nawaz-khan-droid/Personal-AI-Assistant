@@ -16,10 +16,10 @@ for i in $(seq 1 20); do
 done
 
 # Start the web server (UI + tokens) on port 7860 (background)
-python dev_server.py &
+uvicorn core.server:app --host 0.0.0.0 --port 7860 &
 WEB_PID=$!
 echo "Web server starting on :7860 (pid=$WEB_PID)"
 
 # Start the LiveKit worker (foreground)
 echo "Starting LiveKit worker..."
-exec python -m backend.main dev
+exec python -m core.worker

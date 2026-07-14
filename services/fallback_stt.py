@@ -43,14 +43,19 @@ class LocalMoonshineSTT(stt.STT):
             alternatives=[stt.SpeechData(language="en", text=decoded_text)]
         )
 
-    def stream(self, **kwargs) -> stt.RecognizeStream:
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        **kwargs,
+    ) -> stt.RecognizeStream:
         """
         LiveKit requires STT plugins to expose a stream() method. Since Moonshine is
         an offline batch transcriber, we use LiveKit's built-in StreamAdapter to 
         automatically buffer incoming VAD chunks and pass them to recognize().
         """
         # The VAD will automatically collect spoken phrases and hand them to our recognize() method
-        return stt.StreamAdapter(stt=self, vad=VAD.load(), **kwargs)
+        return stt.StreamAdapter(stt=self, **kwargs)
 
     def _transcribe_sync(self, buffer: AudioBuffer) -> str:
         """

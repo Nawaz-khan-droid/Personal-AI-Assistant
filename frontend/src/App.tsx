@@ -9,7 +9,7 @@ import {
 } from '@livekit/components-react';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
 
-const API_URL = "http://localhost:8000/api/token";
+const API_URL = import.meta.env.VITE_API_URL || '/api/token';
 
 function CustomTranscript({ persona }: { persona: string }) {
   const transcript = useTranscriptions();

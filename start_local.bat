@@ -22,10 +22,10 @@ timeout /t 2 /nobreak >nul
 echo   LiveKit running on ws://127.0.0.1:7880
 
 echo [2/3] Starting web server (UI + tokens)...
-start "JARVIS-Web" python dev_server.py
+start "JARVIS-Web" uvicorn core.server:app --port 7860
 timeout /t 2 /nobreak >nul
 echo   Web UI at http://127.0.0.1:7860
 
 echo [3/3] Starting LiveKit worker...
 echo   Worker connecting to LiveKit...
-python -m backend.main dev
+python -m core.worker
