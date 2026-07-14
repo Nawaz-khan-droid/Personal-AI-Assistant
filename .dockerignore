@@ -1,15 +1,59 @@
-.env
-.git
-.gitignore
-__pycache__
+# Dependencies (reinstalled inside Docker, never copy from host)
+node_modules/
+__pycache__/
 *.pyc
-node_modules
-client/node_modules
-client/.next
+*.pyo
+.env
+.venv/
+venv/
+
+# Build artifacts (rebuilt inside Docker)
+frontend/dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Logs and scratch files
 *.log
-test.wav
-jarvis.db
-assistant.log
-IMPLEMENTATION_PLAN.md
-TODO.md
-README.md
+worklog.md
+diag_output/
+*.wav
+*.mp3
+
+# Temp/local-only files
+upload/
+tool-results/
+scripts/
+download/
+temp_refs/
+
+# ONNX models (large — downloaded at runtime if needed, not baked into image)
+core/static/*.onnx
+core/static/*.bin
+
+# Local-dev-only scripts
+start_local.bat
+livekit-server.exe
+diag.py
+test*.py
+smoke_test.py
+run_deploy.ps1
+deploy.py
+upload_to_hf.py
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc generated files
+agent_help.txt
+session_help.txt
+orb_extract.txt
+extracted_orb.html
+agenda.md
