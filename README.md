@@ -28,7 +28,7 @@ license: mit
 </p>
 
 <p align="center">
-  <strong>A real-time voice AI assistant with dual personas, 15 tools, and cloud-first + local fallback architecture.</strong>
+  <strong>A real-time voice AI assistant with dual personas, 19 tools, and cloud-first + local fallback architecture.</strong>
 </p>
 
 ---
@@ -57,8 +57,8 @@ license: mit
 │  ┌─────────────────────────────────────────────┐  │
 │  │  BRAIN — Language Model                     │  │
 │  │  Groq Llama 3.3 70B      (primary)          │  │
-│  │  └► Gemini 2.0 Flash     (fallback)         │  │
-│  │  15 × function_tool()    (tool suite)       │  │
+│  │  └► Gemini 3.1 Flash-Lite (fallback)        │  │
+│  │  19 × function_tool()    (tool suite)       │  │
 │  └─────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────┐  │
 │  │  VOICE — Speech Synthesis                   │  │
@@ -77,25 +77,29 @@ license: mit
 
 Switch persona: use a room name containing `veronica` (e.g. `veronica-session-1234`).
 
-## Tool Suite (15 Tools)
+## Tool Suite (19 Tools)
 
 | # | Tool | Key Required |
 |---|------|-------------|
 | 1 | `get_current_time` | None |
-| 2 | `get_world_time` | None (Open-Meteo) |
-| 3 | `get_weather_data` | None (Open-Meteo) |
-| 4 | `search_web` | None (DuckDuckGo) |
-| 5 | `scrape_page` | None |
-| 6 | `calculate_math` | None |
-| 7 | `remember_user_fact` | None (SQLite) |
-| 8 | `recall_user_facts` | None (SQLite) |
+| 2 | `upsert_user_fact` | None (SQLite Semantic KV) |
+| 3 | `list_all_user_facts` | None (SQLite) |
+| 4 | `delete_user_fact` | None (SQLite) |
+| 5 | `calculate_math` | None |
+| 6 | `get_weather_data` | None (Open-Meteo) |
+| 7 | `search_and_read` | None (Tavily/DDG Fallback) |
+| 8 | `get_world_time` | None |
 | 9 | `open_website_system` | None |
 | 10 | `control_media` | None |
-| 11 | `add_agenda_event` | None |
-| 12 | `view_agenda_events` | None |
-| 13 | `search_youtube_media` | `GOOGLE_CLOUD_API_KEY` |
-| 14 | `verify_claim_truth` | `GOOGLE_CLOUD_API_KEY` |
-| 15 | `send_research_email` | `SENDGRID_API_KEY` + `JARVIS_EMAIL_IDENTITY` |
+| 11 | `close_browser_tab` | None |
+| 12 | `add_agenda_event` | None |
+| 13 | `view_agenda_events` | None |
+| 14 | `search_youtube_media` | `GOOGLE_CLOUD_API_KEY` |
+| 15 | `verify_claim_truth` | `GOOGLE_CLOUD_API_KEY` |
+| 16 | `send_research_email` | `SENDGRID_API_KEY` + `JARVIS_EMAIL_IDENTITY` |
+| 17 | `set_reminder` | None |
+| 18 | `create_file` | None (Writes to Documents) |
+| 19 | `set_volume` | None |
 
 ## Session & Memory
 
