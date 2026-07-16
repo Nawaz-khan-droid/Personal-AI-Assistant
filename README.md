@@ -164,7 +164,7 @@ Personal-AI-Assistant/
 ├── frontend/               # React + Vite + LiveKit Components
 ├── assets/
 │   ├── banner_v2.png       # README banner
-│   └── icon_v2.png         # App icon
+│   └── icon_v3.png         # App icon
 ├── Dockerfile              # Multi-stage: Node 20 build → Python 3.10 runtime
 ├── requirements.txt
 ├── start_local.bat         # Windows dev launcher
