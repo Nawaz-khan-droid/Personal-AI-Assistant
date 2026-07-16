@@ -20,7 +20,7 @@ license: mit
   <a href="https://console.deepgram.com"><img src="https://img.shields.io/badge/TTS-Deepgram%20Aura--2-00e5ff?style=flat-square&logoColor=white" alt="Deepgram Aura-2 TTS"/></a>
   <a href="https://github.com/usefulsensors/moonshine"><img src="https://img.shields.io/badge/Fallback%20STT-Moonshine%20ONNX-555555?style=flat-square&logoColor=white" alt="Moonshine ONNX STT"/></a>
   <a href="https://github.com/hexgrad/kokoro"><img src="https://img.shields.io/badge/Fallback%20TTS-Kokoro%20ONNX-555555?style=flat-square&logoColor=white" alt="Kokoro ONNX TTS"/></a>
-  <a href="https://react.dev"><img src="https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61dafb?style=flat-square&logo=react&logoColor=black" alt="React + Vite"/></a>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/Frontend-React%20%2B%20Vite-20232a?style=flat-square&logo=react&logoColor=61dafb" alt="React + Vite"/></a>
   <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/></a>
   <a href="https://github.com/Nawaz-khan-droid"><img src="https://img.shields.io/badge/GitHub-Nawaz--khan--droid-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub Profile"/></a>
   <a href="https://www.linkedin.com/in/nawaz-n-khan/"><img src="https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=flat-square&logo=linkedin&logoColor=white" alt="LinkedIn Connect"/></a>
@@ -166,7 +166,8 @@ Personal-AI-Assistant/
 ├── frontend/               # React + Vite + LiveKit Components
 ├── assets/
 │   ├── banner_v2.png       # README banner
-│   └── icon_v3.png         # App icon
+│   ├── icon_v3.png         # App icon
+│   └── veronica_icon.png   # Veronica alternate profile icon
 ├── Dockerfile              # Multi-stage: Node 20 build → Python 3.10 runtime
 ├── requirements.txt
 ├── start_local.bat         # Windows dev launcher
