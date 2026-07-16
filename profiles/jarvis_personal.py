@@ -124,7 +124,9 @@ class JarvisPersonalProfile(BaseProfile):
             self.send_research_email,   # Added: Needs simple SendGrid API Key
             self.set_reminder,
             self.morning_briefing,
-            self.read_local_file
+            self.read_local_file,
+            self.take_note,
+            self.set_volume
         ]
 
     @llm.function_tool()
@@ -252,6 +254,14 @@ class JarvisPersonalProfile(BaseProfile):
         
         if normalized_key in getattr(self, '_search_cache', {}):
             return self._search_cache[normalized_key]
+            
+        # Check cross-session SQLite cache
+        db_cache = await asyncio.to_thread(self.memory.get_search_cache, normalized_key, max_age_hours=24)
+        if db_cache:
+            # Populate in-session cache for faster subsequent hits
+            if hasattr(self, '_search_cache'):
+                self._search_cache[normalized_key] = db_cache
+            return db_cache
 
         # ── PRIMARY: Tavily ─────────────────────────────────────────────────
         tavily_key = os.getenv("TAVILY_API_KEY")
@@ -282,6 +292,7 @@ class JarvisPersonalProfile(BaseProfile):
                     final_out = out.strip()
                     if hasattr(self, '_search_cache'):
                         self._search_cache[normalized_key] = final_out
+                    await asyncio.to_thread(self.memory.set_search_cache, normalized_key, final_out)
                     return final_out
             except Exception as e:
                 logger.warning(f"Tavily failed ({e}), switching to DDG fallback")
@@ -325,6 +336,7 @@ class JarvisPersonalProfile(BaseProfile):
             final_out = output.strip()
             if hasattr(self, '_search_cache'):
                 self._search_cache[normalized_key] = final_out
+            await asyncio.to_thread(self.memory.set_search_cache, normalized_key, final_out)
             return final_out
 
         except Exception as e:
@@ -469,6 +481,54 @@ class JarvisPersonalProfile(BaseProfile):
             return f"Here is the current scheduled agenda context:\n{content}"
         except Exception as e:
             return f"Failed to retrieve local agenda streams. Error: {str(e)}"
+
+    @llm.function_tool()
+    async def take_note(self, filename: str, content: str) -> str:
+        """Writes a Markdown note to the user's local documents folder.
+        Args:
+            filename: e.g. 'grocery_list.md' or 'app_ideas.txt'
+            content: The text content to write to the file.
+        """
+        import pathlib
+        safe_dir = pathlib.Path.home() / "Documents" / "JARVIS"
+        safe_dir.mkdir(parents=True, exist_ok=True)
+        target = (safe_dir / filename).resolve()
+        
+        if not str(target).startswith(str(safe_dir)):
+            return "Access denied: cannot write outside safe directory."
+            
+        try:
+            await asyncio.to_thread(target.write_text, content, encoding="utf-8")
+            return f"Note successfully saved to {filename}."
+        except Exception as e:
+            return f"Failed to save note: {e}"
+
+    @llm.function_tool()
+    async def set_volume(self, level_percent: int) -> str:
+        """Sets the system master volume.
+        Args: level_percent (int): Volume level from 0 to 100.
+        """
+        level = max(0, min(100, level_percent))
+        try:
+            def _set_vol():
+                from ctypes import cast, POINTER
+                from comtypes import CLSCTX_ALL
+                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+                
+                devices = AudioUtilities.GetSpeakers()
+                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                volume = cast(interface, POINTER(IAudioEndpointVolume))
+                
+                # Convert 0-100 linear scale to Windows scalar (0.0 to 1.0)
+                scalar_val = float(level) / 100.0
+                volume.SetMasterVolumeLevelScalar(scalar_val, None)
+            
+            await asyncio.to_thread(_set_vol)
+            return f"System volume successfully set to {level}%."
+        except ImportError:
+            return "Volume control requires 'pycaw' and 'comtypes' to be installed."
+        except Exception as e:
+            return f"Failed to set volume: {e}"
 
     # =====================================================================
     # GOOGLE FACT CHECK TOOLS API

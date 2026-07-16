@@ -29,6 +29,13 @@ class LocalMemoryDB:
                     value TEXT
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS search_cache (
+                    query_key TEXT PRIMARY KEY,
+                    result TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
             conn.close()
 
@@ -69,3 +76,29 @@ class LocalMemoryDB:
             conn.close()
             # Flatten the list of tuples into a clean list of strings
             return [row[0] for row in results]
+
+    def set_search_cache(self, query_key: str, result: str):
+        """Thread-safe write operation for search cache."""
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO search_cache (query_key, result, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)", 
+                (query_key, result)
+            )
+            conn.commit()
+            conn.close()
+
+    def get_search_cache(self, query_key: str, max_age_hours: int = 24) -> str:
+        """Thread-safe read operation for search cache with expiration."""
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT result FROM search_cache 
+                WHERE query_key = ? AND timestamp >= datetime('now', ?)
+            """, (query_key, f"-{max_age_hours} hours"))
+            result = cursor.fetchone()
+            conn.close()
+            return result[0] if result else None
+
