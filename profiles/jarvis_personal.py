@@ -513,15 +513,22 @@ class JarvisPersonalProfile(BaseProfile):
             def _set_vol():
                 from ctypes import cast, POINTER
                 from comtypes import CLSCTX_ALL
+                import comtypes
                 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
                 
-                devices = AudioUtilities.GetSpeakers()
-                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-                volume = cast(interface, POINTER(IAudioEndpointVolume))
-                
-                # Convert 0-100 linear scale to Windows scalar (0.0 to 1.0)
-                scalar_val = float(level) / 100.0
-                volume.SetMasterVolumeLevelScalar(scalar_val, None)
+                # Explicitly initialize the COM apartment for this background thread
+                comtypes.CoInitialize()
+                try:
+                    devices = AudioUtilities.GetSpeakers()
+                    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                    volume = cast(interface, POINTER(IAudioEndpointVolume))
+                    
+                    # Convert 0-100 linear scale to Windows scalar (0.0 to 1.0)
+                    scalar_val = float(level) / 100.0
+                    volume.SetMasterVolumeLevelScalar(scalar_val, None)
+                finally:
+                    # Always uninitialize to prevent memory leaks
+                    comtypes.CoUninitialize()
             
             await asyncio.to_thread(_set_vol)
             return f"System volume successfully set to {level}%."
