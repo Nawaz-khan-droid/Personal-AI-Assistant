@@ -163,8 +163,8 @@ Personal-AI-Assistant/
 │   └── memory_db.py        # SQLite persistent memory wrapper
 ├── frontend/               # React + Vite + LiveKit Components
 ├── assets/
-│   ├── banner.png          # README banner
-│   └── icon.png            # App icon
+│   ├── banner_v2.png       # README banner
+│   └── icon_v2.png         # App icon
 ├── Dockerfile              # Multi-stage: Node 20 build → Python 3.10 runtime
 ├── requirements.txt
 ├── start_local.bat         # Windows dev launcher
