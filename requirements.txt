@@ -37,3 +37,8 @@ python-multipart>=0.0.6
 # Phase 2 Utility LLM Tools
 simpleeval>=1.0.0
 ddgs>=9.14.4
+
+# Web search + scraping (Tavily primary, DDG+BS4 fallback)
+tavily-python>=0.3.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0

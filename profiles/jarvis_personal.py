@@ -111,8 +111,7 @@ class JarvisPersonalProfile(BaseProfile):
             self.recall_user_facts,
             self.calculate_math,
             self.get_weather_data,     # Keyless (Open-Meteo)
-            self.search_web,           # Step 1
-            self.scrape_page,          # Step 2: Added
+            self.search_and_read,          # Unified: Tavily primary + DDG+BS4 fallback
             self.get_world_time,       # Keyless
             self.open_website_system,  # Native OS Automation
             self.control_media,        # Native OS Automation
@@ -232,63 +231,84 @@ class JarvisPersonalProfile(BaseProfile):
     # =====================================================================
     # CONTEXT-SAFE RESEARCH PIPELINE (100% Free, GitHub Shareable)
     # =====================================================================
-    @llm.function_tool(description="STEP 1: Run this tool first to find relevant links, titles, and brief summaries for any general web search topic.")
-    async def search_web(self, query: str) -> str:
+    @llm.function_tool(description="Search the web and read actual page content. Use for any research, news, internship search, product comparison, or fact-finding. Use site: operator to restrict to a specific website (e.g., 'site:internshala.com python internship').")
+    async def search_and_read(self, query: str) -> str:
         """
+        Unified search tool: Tavily (primary, fast+deep) with DDG+BS4 fallback.
         Args:
-            query: The clear search term or phrase (e.g., 'Formula 1 race results today').
+            query: Search query. For specific sites use site: operator.
         """
-        from ddgs import DDGS
-        try:
-            results = await asyncio.to_thread(DDGS().text, query, max_results=3)
-            if not results:
-                return f"No online records discovered matching: '{query}'."
-                
-            formatted_summary = "### TOP 3 WEBPAGES DISCOVERED:\n"
-            for i, res in enumerate(results, 1):
-                formatted_summary += f"{i}. Title: {res.get('title', 'Result')}\n"
-                formatted_summary += f"   URL: {res.get('href', '#')}\n"
-                formatted_summary += f"   Snippet: {res.get('body', '')}\n\n"
-                
-            formatted_summary += "INSTRUCTION: Select the single most relevant URL from the list above and use the 'scrape_page' tool to extract its complete contents if deeper research is required."
-            return formatted_summary
-        except Exception as e:
-            return f"Search node connection interrupted. Error: {str(e)}"
-
-    @llm.function_tool(description="STEP 2: Run this tool ONLY AFTER searching to read a compressed, highly descriptive plain-text capture from a single chosen URL link.")
-    async def scrape_page(self, url: str) -> str:
-        """
-        Args:
-            url: The exact, complete destination website link to read (e.g., 'https://example.com').
-        """
-        import httpx
+        import os, httpx
         from bs4 import BeautifulSoup
-        
+
+        # ── PRIMARY: Tavily ─────────────────────────────────────────────────
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        if tavily_key:
+            try:
+                loop = asyncio.get_running_loop()
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: __import__('tavily').TavilyClient(api_key=tavily_key).search(
+                            query=query,
+                            search_depth="basic",
+                            include_answer=True,
+                            max_results=3
+                        )
+                    ),
+                    timeout=7.0
+                )
+                answer = response.get("answer", "")
+                results = response.get("results", [])
+                if answer or results:
+                    out = ""
+                    if answer:
+                        out += f"Summary: {answer}\n\n"
+                    for r in results[:3]:
+                        out += f"• {r.get('title', '')}\n  {r.get('url', '')}\n  {r.get('content', '')[:300]}\n\n"
+                    return out.strip()
+            except Exception as e:
+                logger.warning(f"Tavily failed ({e}), switching to DDG fallback")
+
+        # ── FALLBACK: DDG + async httpx/BS4 ────────────────────────────────
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(url, headers=headers, timeout=6.0, follow_redirects=True)
-                
-            if resp.status_code != 200:
-                return f"Unable to read webpage. Server returned status code: {resp.status_code}"
-                
-            soup = BeautifulSoup(resp.text, "html.parser")
-            # Decompose heavy, noisy script structures
-            for script in soup(["script", "style", "nav", "footer", "header", "form", "aside"]):
-                script.decompose()
-                
-            clean_text = " ".join([line.strip() for line in soup.get_text(separator=" ").splitlines() if line.strip()])
-            
-            # CRUCIAL TRUNCATION: Cap content to exactly 500 words to ensure total context safety
-            words = clean_text.split()
-            truncated_text = " ".join(words[:500])
-            
-            if len(words) > 500:
-                truncated_text += "... [Content truncated for LLM memory limit safety]"
-                
-            return f"### EXTRACTED TEXT ANALYSIS FOR {url}:\n\n{truncated_text}"
+            from ddgs import DDGS
+
+            # Step 1: DDG search snippets
+            ddg_results = await asyncio.to_thread(DDGS().text, query, max_results=3)
+            if not ddg_results:
+                return f"No results found for: '{query}'."
+
+            # Step 2: Scrape top URLs concurrently with tight timeout
+            async def _scrape(client: httpx.AsyncClient, url: str) -> str:
+                try:
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                    r = await client.get(url, headers=headers, timeout=3.0, follow_redirects=True)
+                    if r.status_code != 200:
+                        return ""
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    for tag in soup(["script", "style", "nav", "footer", "header", "form", "aside"]):
+                        tag.decompose()
+                    text = " ".join(soup.get_text(separator=" ").split())
+                    return text[:1500]
+                except Exception:
+                    return ""
+
+            async with httpx.AsyncClient(http2=False) as client:
+                pages = await asyncio.gather(*[_scrape(client, r["href"]) for r in ddg_results])
+
+            output = f"### Search results for: {query}\n\n"
+            for i, (res, content) in enumerate(zip(ddg_results, pages), 1):
+                output += f"{i}. **{res.get('title', 'Result')}**\n"
+                output += f"   URL: {res.get('href', '')}\n"
+                if content:
+                    output += f"   Content: {content[:400]}\n\n"
+                else:
+                    output += f"   Snippet: {res.get('body', '')}\n\n"
+            return output.strip()
+
         except Exception as e:
-            return f"Failed to pull data from target server. Error: {str(e)}"
+            return f"Search failed: {str(e)}"
 
     @llm.function_tool()
     async def get_world_time(self, location: str) -> str:
