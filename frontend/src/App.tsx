@@ -8,6 +8,8 @@ import {
   useLocalParticipant 
 } from '@livekit/components-react';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
+import jarvisIcon from './assets/jarvis-icon.png';
+import veronicaIcon from './assets/veronica-icon.png';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api/token';
 
@@ -142,6 +144,13 @@ export default function App() {
   return (
     <div className="h-screen w-screen bg-black flex items-center justify-center p-4">
       <form onSubmit={handleLogin} className="w-full max-w-sm flex flex-col gap-4 p-8 border border-zinc-800 rounded-2xl bg-zinc-900 shadow-2xl">
+        <div className="flex justify-center mb-2">
+          <img 
+            src={persona === 'jarvis' ? jarvisIcon : veronicaIcon} 
+            alt={`${persona} profile`} 
+            className="w-28 h-28 object-contain rounded-3xl drop-shadow-2xl"
+          />
+        </div>
         <h2 className="text-white text-center text-2xl font-light tracking-wider mb-2">{persona.toUpperCase()}</h2>
         <p className="text-zinc-500 text-center text-xs mb-4">NEURAL INTERFACE</p>
         <input 
