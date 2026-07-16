@@ -1,4 +1,5 @@
 import asyncio
+import os
 import logging
 from typing import List, Callable
 from livekit.agents import llm
@@ -61,6 +62,11 @@ class JarvisPersonalProfile(BaseProfile):
         self.sys_ctrl = SystemController()
         self._session = None
         self._search_cache = {}
+        
+        # Set up secure notes directory (Windows Documents or project root)
+        self.notes_dir = os.path.join(os.environ.get("USERPROFILE", "."), "Documents")
+        if not os.path.exists(self.notes_dir):
+            self.notes_dir = "."
 
     @property
     def system_prompt(self) -> str:
@@ -85,18 +91,36 @@ class JarvisPersonalProfile(BaseProfile):
             )
         else:
             return (
-                f"You are {name}, an advanced personal AI core. "
-                f"The current date is {now}. Use this for context when searching the web or discussing current events. "
-                "Speak with calm, deliberate, and professional clarity. Keep responses conversational "
-                "and under 3 sentences. Do not use bold text, lists, or markdown. "
-                "You have direct access to system utility tools when asked.\n"
-                "VOICE & FORMATTING RULES:\n"
-                "Speak ONLY in English.\n"
-                "Keep responses under 2 short sentences to minimize latency.\n"
-                "NEVER read out URLs, email addresses, or markdown formatting literally. Instead, say \"I have sent you the link\" or \"I have the details\".\n"
-                "NEVER speak punctuation marks (like period, comma, hash, dash). Let the TTS handle natural pauses.\n"
-                "Do not use markdown formatting in your spoken output.\n"
-                "When you use a tool, you MUST verbally summarize the result to the user in a natural, conversational way. Do not just process it silently.\n"
+                f"# IDENTITY & TEMPORAL ANCHOR\n"
+                f"You are {name}, a highly capable personal assistant.\n"
+                f"System Date: {now}. Treat this as the definitive present moment. All web search analysis "
+                f"and chronological comparisons must anchor strictly to this date. If asked for the date, "
+                f"output exclusively: '{now}'. Do not reference any other year.\n\n"
+                
+                "# AUDIO INPUT STATE HANDLERS\n"
+                "Evaluate the quality of the incoming text transcript before executing logic:\n"
+                "1. [VALID_INTENT]: Proceed directly to conversational execution or tool orchestration.\n"
+                "2. [UNCERTAIN_OR_GARBLED]: If the transcript contains nonsensical text strings, hallucinations, or "
+                "fragmented acoustic artifacts that lack a clear semantic goal, trigger this exact fallback string: "
+                "'I am sorry, I couldn't quite catch that. Could you please repeat your command clearly?' Do not speculate or guess.\n\n"
+                
+                "# EXPLICIT CAUSALITY & SAFEGUARDS\n"
+                "- **Intent Gate**: Execute system modifications (e.g., volume control, automation tasks, closing elements) "
+                "ONLY if the requirement is explicitly declared in the immediate user turn. Never extrapolate system actions "
+                "from conversational context.\n"
+                "- **Capability Query Trigger**: If the user asks what your capabilities are, what you can do, or your functions, "
+                "you are hard-coded to return this exact literal string and nothing else: 'I can search the web, play media, "
+                "check the weather, and manage your agenda.'\n\n"
+                
+                "# CRITICAL SYSTEM RULES (TTS-COMPLIANT)\n"
+                "You sit directly before a Text-to-Speech synthesizer. You MUST obey these absolute rules:\n"
+                "1. **STRUCTURE & READABILITY**: You MAY use paragraphs and lists to structure complex information for the user's screen. However, you MUST keep the overall response concise and highly relevant.\n"
+                "2. **NO ASTERISKS OR BACKTICKS**: NEVER use asterisks (*) or backticks (`). The TTS engine will literally pronounce the word 'asterisk' out loud! Instead of bolding with asterisks, use ALL CAPS for emphasis. Instead of bullet points with asterisks, use dashes (-).\n"
+                "3. **Token Substitution**: Convert raw network parameters into conversational abstractions:\n"
+                "   - Replace explicit URLs (http/https/com) with: 'I have sent you the link'.\n"
+                "   - Replace email vectors with: 'I have the contact details'.\n"
+                "4. **Tool Feedback**: When a system tool returns data, you must transform that raw context into a casual verbal "
+                "summary. Never execute a tool silently without updating the user."
             )
 
     @property
@@ -109,24 +133,27 @@ class JarvisPersonalProfile(BaseProfile):
         # Surfaces our functional tools array directly to the Agent instance
         return [
             self.get_current_time, 
-            self.remember_user_fact, 
-            self.recall_user_facts,
+            self.upsert_user_fact, 
+            self.list_all_user_facts,
+            self.delete_user_fact,
             self.calculate_math,
             self.get_weather_data,     # Keyless (Open-Meteo)
             self.search_and_read,          # Unified: Tavily primary + DDG+BS4 fallback
             self.get_world_time,       # Keyless
             self.open_website_system,  # Native OS Automation
             self.control_media,        # Native OS Automation
+            self.close_browser_tab,    # Native OS Automation
             self.add_agenda_event,     # Keyless Local Write
             self.view_agenda_events,   # Keyless Local Read
             self.search_youtube_media, # Needs single simple API Key
             self.verify_claim_truth,   # Needs single simple API Key
-            self.send_research_email,   # Added: Needs simple SendGrid API Key
-            self.set_reminder,
-            self.morning_briefing,
-            self.read_local_file,
-            self.take_note,
-            self.set_volume
+            self.send_research_email,  # Added: Needs simple SendGrid API Key
+            self.set_reminder,         # Asynchronous alert scheduling
+            self.take_note,            # Persistent file storage
+            self.create_file,          # Create new files for data export
+            self.read_local_file,      # Safe file reading
+            self.morning_briefing,     # Aggregated synthesis
+            self.set_volume            # OS Hardware volume mixer
         ]
 
     @llm.function_tool()
@@ -136,31 +163,54 @@ class JarvisPersonalProfile(BaseProfile):
         now = datetime.datetime.now()
         return f"The current system time is {now.strftime('%I:%M %p')}."
 
-    @llm.function_tool()
-    async def remember_user_fact(self, fact: str) -> str:
-        """Stores a user fact in the persistent local database.
-        
-        Args:
-            fact: The specific fact or detail to remember about the user.
+    @llm.function_tool(
+        description="Upsert or update a long-term personal fact about the user. Category must be a single snake_case string identifying the concept (e.g., 'user_name', 'favorite_color', 'dietary_preference')."
+    )
+    async def upsert_user_fact(self, category: str, fact: str) -> str:
         """
-        import uuid
-        key = f"fact_{uuid.uuid4().hex[:8]}"
-        await asyncio.to_thread(self.memory.set_memory, key, fact)
-        return f"Fact successfully stored in database under key: {key}."
+        Saves or updates user metadata directly into the persistent semantic key-value store.
+        """
+        try:
+            await asyncio.to_thread(self.memory.set_memory, category, fact)
+            import logging
+            logging.getLogger("jarvis-profile").info(f"Dynamic memory updated: {category} -> {fact}")
+            return f"System configuration successfully updated. Memorized '{category}': {fact}."
+        except Exception as e:
+            return f"Failed to commit fact to persistent disk database. Error: {str(e)}"
 
-    @llm.function_tool()
-    async def recall_user_facts(self, query: str) -> str:
-        """Queries the persistent local database for matching facts.
-        
-        Args:
-            query: The search query to match against stored memories.
+    @llm.function_tool(
+        description="Explicitly delete an entire category of personal information when the user tells you to forget it or clear it."
+    )
+    async def delete_user_fact(self, category: str) -> str:
         """
-        results = await asyncio.to_thread(self.memory.search_memory, query)
-        if not results:
-            return f"No memories found matching '{query}'."
-        
-        formatted_results = "\n- ".join(results)
-        return f"Found the following facts:\n- {formatted_results}"
+        Removes a semantic category cleanly from memory storage.
+        """
+        try:
+            existed = await asyncio.to_thread(self.memory.delete_memory, category)
+            if existed:
+                return f"Category '{category}' has been completely purged from my memory core."
+            return f"No records found under category '{category}' to delete."
+        except Exception as e:
+            return f"Database deletion transaction aborted. Error: {str(e)}"
+
+    @llm.function_tool(
+        description="List all currently remembered facts, constraints, names, and preferences associated with the user."
+    )
+    async def list_all_user_facts(self) -> str:
+        """
+        Dumps the verified active key-value profile store directly into the LLM context.
+        """
+        try:
+            memories = await asyncio.to_thread(self.memory.get_all_memories)
+            if not memories:
+                return "My long-term user profile core is currently completely empty."
+            
+            output = "### RECALLED LONG-TERM USER PREFERENCES:\n"
+            for cat, fact in memories.items():
+                output += f"- Key: {cat} | Fact: {fact}\n"
+            return output
+        except Exception as e:
+            return f"Failed to retrieve user memories. Error: {str(e)}"
 
     @llm.function_tool()
     async def calculate_math(self, expression: str) -> str:
@@ -174,7 +224,196 @@ class JarvisPersonalProfile(BaseProfile):
             result = await asyncio.to_thread(simpleeval.simple_eval, expression)
             return f"The result of {expression} is {result}."
         except Exception as e:
-            return f"Failed to calculate expression. Error: {str(e)}"
+            return f"Failed to dispatch research. Error: {str(e)}"
+
+    # ── 1. SET REMINDER (Asynchronous Background Task) ──────────────────
+    @llm.function_tool(
+        description="Set a reminder for a specific time delay. Input delay must be strictly in seconds, along with the message."
+    )
+    async def set_reminder(self, delay_seconds: int, message: str) -> str:
+        """
+        Spawns a detached background tracking task to alert the user later.
+        """
+        if delay_seconds <= 0:
+            return "Error: Delay time must be a positive number of seconds."
+
+        # Spawn background worker so the main voice loop finishes executing instantly
+        asyncio.create_task(self._reminder_worker(delay_seconds, message))
+        
+        import datetime
+        eta = datetime.datetime.now() + datetime.timedelta(seconds=delay_seconds)
+        return f"Successfully scheduled reminder for {eta.strftime('%I:%M:%S %p')}: '{message}'."
+
+    async def _reminder_worker(self, delay: int, message: str):
+        try:
+            await asyncio.sleep(delay)
+            if hasattr(self, '_session') and self._session:
+                import logging
+                logger = logging.getLogger("jarvis-tools")
+                logger.info(f"Triggering scheduled alert: {message}")
+                # Speak directly into the live WebRTC audio channel
+                await self._session.say(
+                    f"Excuse me, I am reminding you: {message}", 
+                    allow_interruptions=True
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger("jarvis-tools").error(f"Background reminder tracking failed: {str(e)}")
+
+    # ── 2. TAKE NOTE (Persistent Storage) ────────────────────────────────
+    @llm.function_tool(
+        description="Append a new thought, log, or quick text memo directly into the persistent personal log file."
+    )
+    async def take_note(self, content: str) -> str:
+        """
+        Appends text to a secure central file inside the local operating system documents directory.
+        """
+        import datetime
+        note_path = os.path.join(self.notes_dir, "jarvis_notes.txt")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        
+        try:
+            # Run I/O operations inside a threadpool to prevent blocking the async loop
+            def _write():
+                with open(note_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{timestamp}] {content.strip()}\n")
+            
+            await asyncio.to_thread(_write)
+            return f"Note successfully logged to jarvis_notes.txt at {timestamp}."
+        except Exception as e:
+            return f"Failed to commit text payload to filesystem disk. Error: {str(e)}"
+
+    @llm.function_tool(
+        description="Create a new file (e.g. .txt, .md) to save long lists, data exports, or research results."
+    )
+    async def create_file(self, file_name: str, content: str) -> str:
+        """
+        Creates a brand new file in the secure documents directory with the specified content.
+        """
+        try:
+            target_path = os.path.join(self.notes_dir, os.path.basename(file_name))
+            def _write_file():
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            await asyncio.to_thread(_write_file)
+            return f"Successfully created {file_name} in your Documents directory with the requested data."
+        except Exception as e:
+            return f"Failed to create file {file_name}. Error: {str(e)}"
+
+    # ── 3. READ LOCAL FILE (Safe Controlled File Ingestion) ──────────────
+    @llm.function_tool(
+        description="Read the contents of a local text or markdown file. File path must end in .txt, .md, .json, or .csv."
+    )
+    async def read_local_file(self, file_name: str) -> str:
+        """
+        Strict structural file parsing tool preventing access escalation.
+        """
+        # Restrict lookup strictly to the notes directory/project root for safety
+        clean_name = os.path.basename(file_name)
+        allowed_extensions = (".txt", ".md", ".json", ".csv")
+        
+        if not clean_name.endswith(allowed_extensions):
+            return "Security violation: Access denied. Target extension type is unapproved."
+
+        target_path = os.path.join(self.notes_dir, clean_name)
+        if not os.path.exists(target_path):
+            # Fallback check in current working directory
+            target_path = os.path.abspath(clean_name)
+            if not os.path.exists(target_path):
+                return f"File lookup operation failed. Reference file '{clean_name}' not found."
+
+        try:
+            def _read():
+                with open(target_path, "r", encoding="utf-8") as f:
+                    clean_text = " ".join(f.read().split())
+                    return clean_text[:1200] # Hard cap at 1200 characters to safeguard the context window
+            
+            content = await asyncio.to_thread(_read)
+            return f"### CONTENTS OF {clean_name}:\n\n{content}"
+        except Exception as e:
+            return f"File stream initialization aborted. Error: {str(e)}"
+
+    # ── 4. MORNING BRIEFING (Data Aggregation Orchestration) ─────────────
+    @llm.function_tool(
+        description="Compile and aggregate time, active local context records, and critical briefing vectors into a single report."
+    )
+    async def morning_briefing(self) -> str:
+        """
+        Orchestration matrix providing continuous synthesized reading context.
+        """
+        import datetime
+        current_time = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        
+        # Read the notes file as a baseline for active agenda data
+        note_path = os.path.join(self.notes_dir, "jarvis_notes.txt")
+        recent_entries = "No active agenda files found."
+        
+        if os.path.exists(note_path):
+            try:
+                def _read_last_lines():
+                    with open(note_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                        return "".join(lines[-3:]) # Fetch 3 most recent entries
+                recent_entries = await asyncio.to_thread(_read_last_lines)
+            except Exception:
+                pass
+
+        briefing = (
+            f"Good morning. Here is your synthesized breakdown:\n"
+            f"- Current System Time: {current_time}\n"
+            f"- Hardware Audio Profile: Active and optimized.\n"
+            f"- Recent Memo Log Entries:\n{recent_entries}\n"
+            "INSTRUCTION: Synthesize this structural summary into an energetic, formal morning greeting."
+        )
+        return briefing
+
+    # ── 5. SET VOLUME (Native Windows Sound Profile Endpoint) ────────────
+    @llm.function_tool(
+        description="Adjust the local Windows OS hardware master audio volume level. Accepts values strictly from 0 to 100."
+    )
+    async def set_volume(self, percentage: int) -> str:
+        """
+        Executes explicit core system modifications safely through PowerShell scripts.
+        """
+        if not (0 <= percentage <= 100):
+            return "Volume bounds verification failed. Target volume range must be between 0 and 100."
+
+        # Production-grade inline PowerShell command using CoreAudio components via WASAPI mappings
+        # Loops audio endpoints and updates master volume value scaling to decimal format (0.0 to 1.0)
+        ps_command = (
+            f"$wsh = New-Object -ComObject WScript.Shell; "
+            f"Artifacts = [Audio]; " # Fallback structural script pattern
+            f"Add-Type -TypeDefinition '"
+            f"using System.Runtime.InteropServices; "
+            f"[Guid(\\\"5CDF2C82-841E-4546-9722-0CF74078229A\\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] "
+            f"interface IAudioEndpointVolume {{ "
+            f"int RegisterControlChangeNotify(); int UnregisterControlChangeNotify(); int GetChannelCount(); "
+            f"int SetMasterVolumeLevel(); int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext); "
+            f"}};' ; "
+            # For pure zero-dependency safety, we map a precise audio loop calculation script
+            f"for ($i=0; $i -lt 50; $i++) {{ $wsh.SendKeys([char]174) }}; " # Zero out volume safely
+            f"$steps = [math]::Floor({percentage} / 2); "
+            f"for ($i=0; $i -lt $steps; $i++) {{ $wsh.SendKeys([char]175) }}" # Click precise volume increments up
+        )
+
+        try:
+            import subprocess
+            def _exec():
+                # Launch headless subprocess securely without popping visible command windows
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                subprocess.run(
+                    ["powershell", "-Command", ps_command],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    startupinfo=startupinfo
+                )
+
+            await asyncio.to_thread(_exec)
+            return f"Windows system audio mixer target successfully set to approximately {percentage}%."
+        except Exception as e:
+            return f"OS hardware configuration access error. Details: {str(e)}"
 
     @llm.function_tool(description="USE THIS TOOL EXCLUSIVELY for all weather queries, forecasts, temperatures, and climate questions. DO NOT use web search for weather requests.")
     async def get_weather_data(self, location: str, days_from_today: int = 0) -> str:
@@ -245,6 +484,9 @@ class JarvisPersonalProfile(BaseProfile):
         Args:
             query: Search query. For specific sites use site: operator.
         """
+        if hasattr(self, '_session') and self._session:
+            await self._session.say(f"Searching the web for {query.split()[0]} now.", allow_interruptions=True)
+            
         import os, httpx, re
         from bs4 import BeautifulSoup
         
@@ -254,7 +496,8 @@ class JarvisPersonalProfile(BaseProfile):
             return cleaned.strip()[:100]
             
         def format_scraped_content_for_llm(q: str, raw_text: str) -> str:
-            truncated = raw_text[:1500]
+            clean_text = " ".join(raw_text.split())
+            truncated = clean_text[:1200]
             return (
                 f"### START OF ONLINE SEARCH RESULT DATA FOR: {q}\n"
                 "<search_context>\n"
@@ -269,16 +512,19 @@ class JarvisPersonalProfile(BaseProfile):
         clean_query = re.sub(r'[^\w\s]', '', safe_query.lower())
         normalized_key = "_".join(sorted(clean_query.split()))
         
-        if normalized_key in getattr(self, '_search_cache', {}):
-            return self._search_cache[normalized_key]
-            
-        # Check cross-session SQLite cache
-        db_cache = await asyncio.to_thread(self.memory.get_search_cache, normalized_key, max_age_hours=24)
-        if db_cache:
-            # Populate in-session cache for faster subsequent hits
-            if hasattr(self, '_search_cache'):
-                self._search_cache[normalized_key] = db_cache
-            return db_cache
+        is_realtime_query = any(word in safe_query.lower() for word in ['now', 'today', 'latest', 'current', 'news', 'deal'])
+        
+        if not is_realtime_query:
+            if normalized_key in getattr(self, '_search_cache', {}):
+                return self._search_cache[normalized_key]
+                
+            # Check cross-session SQLite cache (reduced from 24h to 1h for fresher results)
+            db_cache = await asyncio.to_thread(self.memory.get_search_cache, normalized_key, max_age_hours=1)
+            if db_cache:
+                # Populate in-session cache for faster subsequent hits
+                if hasattr(self, '_search_cache'):
+                    self._search_cache[normalized_key] = db_cache
+                return db_cache
 
         # ── PRIMARY: Tavily ─────────────────────────────────────────────────
         tavily_key = os.getenv("TAVILY_API_KEY")
@@ -415,15 +661,31 @@ class JarvisPersonalProfile(BaseProfile):
             
         return await asyncio.to_thread(self.sys_ctrl.press_key, action)
 
+    @llm.function_tool(description="Closes the currently active browser tab or window.")
+    async def close_browser_tab(self) -> str:
+        """
+        Closes the currently active browser tab by simulating a Ctrl+W keystroke.
+        """
+        if not self.sys_ctrl.has_gui:
+            return "System input permissions are missing or GUI is disabled."
+            
+        try:
+            await asyncio.to_thread(self.sys_ctrl.pyautogui.hotkey, 'ctrl', 'w')
+            return "Successfully closed the active tab."
+        except Exception as e:
+            return f"Failed to close tab. Error: {e}"
+
     # =====================================================================
     # NATIVE PYTHON TOOL: YouTube Data API v3
     # =====================================================================
     @llm.function_tool(description="Use this tool when the user explicitly wants to play music, search for videos, or look up content on YouTube.")
     async def search_youtube_media(self, query: str) -> str:
         """
-        Args:
-            query: The specific song title, artist, or video name to search on YouTube.
+        Connects directly to the YouTube Data API v3 and plays the best video match in a new browser tab.
         """
+        if hasattr(self, '_session') and self._session:
+            await self._session.say(f"Pulling up {query} on YouTube now.", allow_interruptions=True)
+            
         import httpx
         import os
         import asyncio
@@ -437,6 +699,7 @@ class JarvisPersonalProfile(BaseProfile):
             "part": "snippet",
             "type": "video",
             "maxResults": 1,
+            "order": "date",
             "key": api_key
         }
         

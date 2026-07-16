@@ -3,15 +3,7 @@ echo ========================================
 echo   JARVIS Local Dev Startup
 echo ========================================
 
-REM Check GROQ_API_KEY
-if "%GROQ_API_KEY%"=="" (
-    echo.
-    echo ERROR: GROQ_API_KEY not set.
-    echo   set GROQ_API_KEY=your_key_here
-    echo.
-    exit /b 1
-)
-
+REM Python will load the GROQ_API_KEY from the .env file automatically.
 set LIVEKIT_URL=ws://127.0.0.1:7880
 set LIVEKIT_API_KEY=devkey
 set LIVEKIT_API_SECRET=secret
@@ -28,4 +20,4 @@ echo   Web UI at http://127.0.0.1:7860
 
 echo [3/3] Starting LiveKit worker...
 echo   Worker connecting to LiveKit...
-python -m core.worker
+python -m core.worker dev

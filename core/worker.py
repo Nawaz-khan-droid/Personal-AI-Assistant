@@ -120,13 +120,15 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext()
     initial_ctx.add_message(role="system", content=profile.system_prompt)
     
-    # 2.5 LONG-TERM MEMORY: Inject retrieved persistent memory safely
+    # 2.5 LONG-TERM MEMORY: Inject retrieved persistent semantic memory safely
     try:
         import asyncio
-        stored_facts = await asyncio.to_thread(profile.memory.search_memory, "")
-        if stored_facts:
-            sanitized_facts = [f"- {fact[:100].strip()}" for fact in stored_facts[:10]]
-            facts_block = "USER RETRIEVED CONTEXT:\n" + "\n".join(sanitized_facts)
+        stored_memories = await asyncio.to_thread(profile.memory.get_all_memories)
+        if stored_memories:
+            facts_block = "### STORED LONG-TERM USER PREFERENCES:\n"
+            for cat, fact in stored_memories.items():
+                facts_block += f"- {cat}: {fact}\n"
+            facts_block += "\nUse this memory context natively during conversations. Only invoke the 'upsert_user_fact' tool if the user provides completely new info or explicitly updates a preference."
             initial_ctx.add_message(role="system", content=facts_block)
     except Exception as e:
         logger.error(f"Failed to prime memory context: {e}")
@@ -137,28 +139,32 @@ async def entrypoint(ctx: JobContext):
     # EAR: VAD Pipeline Core
     vad_plugin = silero.VAD.load(activation_threshold=0.6, min_speech_duration=0.3, min_silence_duration=0.8)
 
-    # EAR: Deepgram Nova-2 STT (Primary) with robust local Moonshine fallback
-    dg_stt = deepgram.STT(
-        model="nova-2", 
+    # EAR: Deepgram STT (Primary) with robust local Moonshine fallback
+    primary_stt = deepgram.STT(
+        model="nova-2-conversationalai", 
         api_key=settings.deepgram_api_key,
         smart_format=True,
+        punctuate=True,
         keywords=[("Jarvis", 2.0), ("Veronica", 2.0), ("weather", 2.0)]
     )
     local_stt = LocalMoonshineSTT()
-    stt_plugin = stt.FallbackAdapter([dg_stt, local_stt], vad=vad_plugin)
+    stt_plugin = stt.FallbackAdapter([primary_stt, local_stt], vad=vad_plugin)
 
-    # BRAIN: LLM Proxy Chain (with Rate Limiting)
     groq_llm = RateLimitedGroqLLM(
         rpm=25,
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         api_key=settings.groq_api_key
     )
     gemini_llm = openai.LLM(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=settings.gemini_api_key,
-        model="gemini-2.0-flash"
+        model="gemini-3.1-flash-lite"
     )
-    llm_plugin = llm.FallbackAdapter([groq_llm, gemini_llm], attempt_timeout=5.0)
+    openai_llm = openai.LLM(
+        model="gpt-4o-mini",
+        api_key=settings.openai_api_key
+    )
+    llm_plugin = llm.FallbackAdapter([gemini_llm, groq_llm, openai_llm], attempt_timeout=5.0)
 
     # VOICE: TTS Proxy Chain
     tts_model = "aura-2-neptune-en" if profile.persona == "jarvis" else "aura-2-aurora-en"

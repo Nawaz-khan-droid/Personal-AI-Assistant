@@ -34,7 +34,11 @@ if not logger.handlers:
 app = FastAPI(title="Jarvis Token Server")
 
 # Allow the frontend Vite server to access the token API locally
-ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:8000"]
+ALLOWED_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:8000", "http://127.0.0.1:8000",
+    "http://localhost:7860", "http://127.0.0.1:7860"
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

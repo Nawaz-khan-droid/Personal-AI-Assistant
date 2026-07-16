@@ -61,6 +61,27 @@ class LocalMemoryDB:
             conn.close()
             return result[0] if result else None
 
+    def delete_memory(self, key: str) -> bool:
+        """Thread-safe delete operation. Returns True if a row was deleted."""
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_context WHERE key = ?", (key,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
+    def get_all_memories(self) -> dict:
+        """Fetches the entire key-value memory store as a dictionary."""
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM user_context")
+            results = cursor.fetchall()
+            conn.close()
+            return {row[0]: row[1] for row in results}
+
     def search_memory(self, search_query: str) -> list:
         """
         Queries the user_context table using a SQL LIKE operator 
