@@ -22,3 +22,43 @@ agenda.md
 *.wav
 test_*.py
 *temp*
+# Pytest
+.pytest_cache/
+
+# Internal reports and logs
+.env
+.env.local
+.env.*.local
+__pycache__/
+*.pyc
+assistant.log
+response_audio.mp3
+test.wav
+backend/static/upload_temp.*
+*.sqlite
+*.db
+.vscode/
+.idea/
+node_modules/
+dist/
+build/
+.DS_Store
+google_credentials.json
+agenda.md
+*.onnx
+*.exe
+*.wav
+test_*.py
+*temp*
+# Pytest
+.pytest_cache/
+
+# Internal reports and logs
+*.md
+!README.md
+!frontend/README.md
+*.txt
+!requirements.txt
+*.html
+!core/static/index.html
+!frontend/index.html
