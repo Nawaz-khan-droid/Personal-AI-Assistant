@@ -100,25 +100,36 @@ async def entrypoint(ctx: JobContext):
     def on_data_received(data_msg):
         try:
             payload = json.loads(data_msg.data.decode("utf-8"))
+            
+            # Guard clause: Ensure payload is strictly a dictionary to prevent AttributeError exploits
+            if not isinstance(payload, dict):
+                logger.warning("Rejected malformed data channel payload: Not a JSON Object.")
+                return
+
             msg_type = payload.get("type")
 
             if msg_type == "persona_change":
-                persona = payload.get("persona", "JARVIS")
-                if persona in PERSONA_VOICES:
+                persona = payload.get("persona")
+                # Defends persona boundaries using strict whitelist lookup
+                if persona and persona in PERSONA_VOICES:
                     current_persona = persona
                     tts.opts.voice = PERSONA_VOICES[persona]
                     preview = "At your service, Sir." if persona == "JARVIS" else "Hello, I'm Veronica."
                     asyncio.create_task(session.say(preview, allow_interruptions=True))
                     asyncio.create_task(_send_transcript(ctx, "agent", preview))
-                    logger.info(f"Persona changed to {persona}, voice={tts.opts.voice}")
+                    logger.info(f"Persona safely changed to {persona}, voice={tts.opts.voice}")
+                else:
+                    logger.warning(f"Unauthorized or missing persona requested: {persona}")
 
             elif msg_type == "chat":
-                text = payload.get("text", "").strip()
-                if text:
-                    asyncio.create_task(_handle_chat(ctx, session, llm_plugin, text))
+                text = payload.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    asyncio.create_task(_handle_chat(ctx, session, llm_plugin, text.strip()))
 
+        except json.JSONDecodeError:
+            logger.error("Failed to parse incoming data stream frame: Invalid JSON.")
         except Exception as e:
-            logger.error(f"Error handling data message: {e}")
+            logger.error(f"Data channel processing failure safely caught: {e}")
 
     await session.say(
         "Online, Sir. Systems are nominal. Awaiting your command.",

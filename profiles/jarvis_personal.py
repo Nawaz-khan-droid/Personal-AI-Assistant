@@ -248,8 +248,25 @@ class JarvisPersonalProfile(BaseProfile):
         import os, httpx, re
         from bs4 import BeautifulSoup
         
+        # Defend against injection by stripping dangerous characters and capping length
+        def sanitize_and_truncate_query(user_query: str) -> str:
+            cleaned = re.sub(r"[^\w\s\-\:\.]", "", user_query)
+            return cleaned.strip()[:100]
+            
+        def format_scraped_content_for_llm(q: str, raw_text: str) -> str:
+            truncated = raw_text[:1500]
+            return (
+                f"### START OF ONLINE SEARCH RESULT DATA FOR: {q}\n"
+                "<search_context>\n"
+                f"{truncated}\n"
+                "</search_context>\n"
+                "### END OF ONLINE SEARCH RESULT DATA"
+            )
+
+        safe_query = sanitize_and_truncate_query(query)
+        
         # Check normalized cache first
-        clean_query = re.sub(r'[^\w\s]', '', query.strip().lower())
+        clean_query = re.sub(r'[^\w\s]', '', safe_query.lower())
         normalized_key = "_".join(sorted(clean_query.split()))
         
         if normalized_key in getattr(self, '_search_cache', {}):
@@ -272,7 +289,7 @@ class JarvisPersonalProfile(BaseProfile):
                     loop.run_in_executor(
                         None,
                         lambda: __import__('tavily').TavilyClient(api_key=tavily_key).search(
-                            query=query,
+                            query=safe_query,
                             search_depth="basic",
                             include_answer=True,
                             max_results=3
@@ -289,7 +306,7 @@ class JarvisPersonalProfile(BaseProfile):
                     for r in results[:3]:
                         out += f"• {r.get('title', '')}\n  {r.get('url', '')}\n  {r.get('content', '')[:300]}\n\n"
                     
-                    final_out = out.strip()
+                    final_out = format_scraped_content_for_llm(safe_query, out.strip())
                     if hasattr(self, '_search_cache'):
                         self._search_cache[normalized_key] = final_out
                     await asyncio.to_thread(self.memory.set_search_cache, normalized_key, final_out)
@@ -302,7 +319,7 @@ class JarvisPersonalProfile(BaseProfile):
             from ddgs import DDGS
 
             # Step 1: DDG search snippets
-            ddg_results = await asyncio.to_thread(DDGS().text, query, max_results=3)
+            ddg_results = await asyncio.to_thread(DDGS().text, safe_query, max_results=3)
             if not ddg_results:
                 return f"No results found for: '{query}'."
 
@@ -333,7 +350,7 @@ class JarvisPersonalProfile(BaseProfile):
                 else:
                     output += f"   Snippet: {res.get('body', '')}\n\n"
             
-            final_out = output.strip()
+            final_out = format_scraped_content_for_llm(safe_query, output.strip())
             if hasattr(self, '_search_cache'):
                 self._search_cache[normalized_key] = final_out
             await asyncio.to_thread(self.memory.set_search_cache, normalized_key, final_out)

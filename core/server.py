@@ -34,11 +34,12 @@ if not logger.handlers:
 app = FastAPI(title="Jarvis Token Server")
 
 # Allow the frontend Vite server to access the token API locally
+ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:8000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -88,11 +89,14 @@ async def get_token(request: TokenRequest):
         room=dynamic_room_name,
         can_publish=True,
         can_subscribe=True,
+        room_create=False,
+        room_list=False,
+        room_admin=False
     ))
     
-    # Monkeypatch to fix 15-hour Windows clock skew issue
+    # Restrict TTL tightly to 15 minutes for maximum security
     import datetime
-    token.ttl = datetime.timedelta(days=2)
+    token.ttl = datetime.timedelta(minutes=15)
     return TokenResponse(token=token.to_jwt(), url=settings.livekit_url)
 
 @app.get("/api/health")
