@@ -120,6 +120,17 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext()
     initial_ctx.add_message(role="system", content=profile.system_prompt)
     
+    # 2.5 LONG-TERM MEMORY: Inject retrieved persistent memory safely
+    try:
+        import asyncio
+        stored_facts = await asyncio.to_thread(profile.memory.search_memory, "")
+        if stored_facts:
+            sanitized_facts = [f"- {fact[:100].strip()}" for fact in stored_facts[:10]]
+            facts_block = "USER RETRIEVED CONTEXT:\n" + "\n".join(sanitized_facts)
+            initial_ctx.add_message(role="system", content=facts_block)
+    except Exception as e:
+        logger.error(f"Failed to prime memory context: {e}")
+    
     # 3. TOOLS: Extract profile-specific toolsets for the LLM
     agent_tools = profile.get_tools()
 
@@ -172,6 +183,9 @@ async def entrypoint(ctx: JobContext):
         tts=tts_plugin,
         vad=vad_plugin,
     )
+    
+    # Expose session to profile tools (for set_reminder etc.)
+    profile._session = session
     
     await session.start(agent=jarvis_agent, room=ctx.room, record=False)
     try:

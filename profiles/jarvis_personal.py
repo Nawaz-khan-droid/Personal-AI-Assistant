@@ -59,6 +59,8 @@ class JarvisPersonalProfile(BaseProfile):
         self.language_mode = language_mode.lower()
         self.memory = LocalMemoryDB()
         self.sys_ctrl = SystemController()
+        self._session = None
+        self._search_cache = {}
 
     @property
     def system_prompt(self) -> str:
@@ -119,7 +121,10 @@ class JarvisPersonalProfile(BaseProfile):
             self.view_agenda_events,   # Keyless Local Read
             self.search_youtube_media, # Needs single simple API Key
             self.verify_claim_truth,   # Needs single simple API Key
-            self.send_research_email   # Added: Needs simple SendGrid API Key
+            self.send_research_email,   # Added: Needs simple SendGrid API Key
+            self.set_reminder,
+            self.morning_briefing,
+            self.read_local_file
         ]
 
     @llm.function_tool()
@@ -238,8 +243,15 @@ class JarvisPersonalProfile(BaseProfile):
         Args:
             query: Search query. For specific sites use site: operator.
         """
-        import os, httpx
+        import os, httpx, re
         from bs4 import BeautifulSoup
+        
+        # Check normalized cache first
+        clean_query = re.sub(r'[^\w\s]', '', query.strip().lower())
+        normalized_key = "_".join(sorted(clean_query.split()))
+        
+        if normalized_key in getattr(self, '_search_cache', {}):
+            return self._search_cache[normalized_key]
 
         # ── PRIMARY: Tavily ─────────────────────────────────────────────────
         tavily_key = os.getenv("TAVILY_API_KEY")
@@ -266,7 +278,11 @@ class JarvisPersonalProfile(BaseProfile):
                         out += f"Summary: {answer}\n\n"
                     for r in results[:3]:
                         out += f"• {r.get('title', '')}\n  {r.get('url', '')}\n  {r.get('content', '')[:300]}\n\n"
-                    return out.strip()
+                    
+                    final_out = out.strip()
+                    if hasattr(self, '_search_cache'):
+                        self._search_cache[normalized_key] = final_out
+                    return final_out
             except Exception as e:
                 logger.warning(f"Tavily failed ({e}), switching to DDG fallback")
 
@@ -305,7 +321,11 @@ class JarvisPersonalProfile(BaseProfile):
                     output += f"   Content: {content[:400]}\n\n"
                 else:
                     output += f"   Snippet: {res.get('body', '')}\n\n"
-            return output.strip()
+            
+            final_out = output.strip()
+            if hasattr(self, '_search_cache'):
+                self._search_cache[normalized_key] = final_out
+            return final_out
 
         except Exception as e:
             return f"Search failed: {str(e)}"
