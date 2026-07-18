@@ -24,7 +24,6 @@ license: mit
   <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/></a>
   <a href="https://github.com/Nawaz-khan-droid"><img src="https://img.shields.io/badge/GitHub-Nawaz--khan--droid-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub Profile"/></a>
   <a href="https://www.linkedin.com/in/nawaz-n-khan/"><img src="https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=flat-square&logo=linkedin&logoColor=white" alt="LinkedIn Connect"/></a>
-  <a href="https://app.tavily.com/"><img src="https://img.shields.io/badge/Search-Tavily%20AI-00e5ff?style=flat-square" alt="Tavily AI Search"/></a>
 </p>
 
 <p align="center">
