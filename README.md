@@ -28,7 +28,7 @@ license: mit
 </p>
 
 <p align="center">
-  <strong>A real-time voice AI assistant with dual personas, 19 tools, and cloud-first + local fallback architecture.</strong>
+  <strong>A real-time voice AI assistant with dual personas, 20 tools, and cloud-first + local fallback architecture.</strong>
 </p>
 
 ---
@@ -58,7 +58,7 @@ license: mit
 │  │  BRAIN — Language Model                     │  │
 │  │  Groq Llama 3.3 70B      (primary)          │  │
 │  │  └► Gemini 3.1 Flash-Lite (fallback)        │  │
-│  │  19 × function_tool()    (tool suite)       │  │
+│  │  20 × function_tool()    (tool suite)       │  │
 │  └─────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────┐  │
 │  │  VOICE — Speech Synthesis                   │  │
@@ -77,7 +77,7 @@ license: mit
 
 Switch persona: use a room name containing `veronica` (e.g. `veronica-session-1234`).
 
-## Tool Suite (19 Tools)
+## Tool Suite (20 Tools)
 
 | # | Tool | Key Required |
 |---|------|-------------|
@@ -100,6 +100,7 @@ Switch persona: use a room name containing `veronica` (e.g. `veronica-session-12
 | 17 | `set_reminder` | None |
 | 18 | `create_file` | None (Writes to Documents) |
 | 19 | `set_volume` | None |
+| 20 | `read_clipboard` | None (Reads OS Clipboard) |
 
 ## Session & Memory
 

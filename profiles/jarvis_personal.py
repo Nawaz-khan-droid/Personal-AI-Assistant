@@ -153,7 +153,8 @@ class JarvisPersonalProfile(BaseProfile):
             self.create_file,          # Create new files for data export
             self.read_local_file,      # Safe file reading
             self.morning_briefing,     # Aggregated synthesis
-            self.set_volume            # OS Hardware volume mixer
+            self.set_volume,           # OS Hardware volume mixer
+            self.read_clipboard        # Clipboard integration
         ]
 
     @llm.function_tool()
@@ -162,6 +163,25 @@ class JarvisPersonalProfile(BaseProfile):
         import datetime
         now = datetime.datetime.now()
         return f"The current system time is {now.strftime('%I:%M %p')}."
+
+    @llm.function_tool(description="Reads the current text copied to the user's system clipboard.")
+    async def read_clipboard(self) -> str:
+        """
+        Retrieves the exact text content currently residing in the operating system's clipboard.
+        """
+        import pyperclip
+        import asyncio
+        try:
+            content = await asyncio.to_thread(pyperclip.paste)
+            if not content or not content.strip():
+                return "The clipboard is currently empty."
+            
+            # Prevent excessive payload tokens if clipboard is massively huge (e.g. copied a whole book)
+            if len(content) > 5000:
+                return f"Clipboard text is very long ({len(content)} characters). Here is the beginning:\n{content[:5000]}..."
+            return f"Clipboard content:\n{content}"
+        except Exception as e:
+            return f"Failed to read clipboard. Error: {str(e)}"
 
     @llm.function_tool(
         description="Upsert or update a long-term personal fact about the user. Category must be a single snake_case string identifying the concept (e.g., 'user_name', 'favorite_color', 'dietary_preference')."
