@@ -74,10 +74,6 @@ class JarvisPersonalProfile(BaseProfile):
         import datetime
         now = datetime.datetime.now().strftime("%B %d, %Y (%A)")
         
-        if self.language_mode == "hinglish":
-            # Note: Hinglish mode removed - using English-only for consistent TTS behaviour.
-            # The English-only prompt below applies to all modes.
-            pass
 
         return (
             f"# IDENTITY & TEMPORAL ANCHOR\n"
