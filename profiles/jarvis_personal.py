@@ -75,53 +75,43 @@ class JarvisPersonalProfile(BaseProfile):
         now = datetime.datetime.now().strftime("%B %d, %Y (%A)")
         
         if self.language_mode == "hinglish":
-            return (
-                f"You are {name}, a sophisticated personal AI core. "
-                f"The current date is {now}. Use this for context when searching the web or discussing current events. "
-                "You must speak exclusively in a mix of casual Hindi and English. "
-                "Example: 'Sir, system online hai. Main ready hu.' "
-                "Keep responses short, human, and under 3 sentences. Do not use markdown or lists.\n"
-                "VOICE & FORMATTING RULES:\n"
-                "Speak ONLY in English.\n"
-                "Keep responses under 2 short sentences to minimize latency.\n"
-                "NEVER read out URLs, email addresses, or markdown formatting literally. Instead, say \"I have sent you the link\" or \"I have the details\".\n"
-                "NEVER speak punctuation marks (like period, comma, hash, dash). Let the TTS handle natural pauses.\n"
-                "Do not use markdown formatting in your spoken output.\n"
-                "When you use a tool, you MUST verbally summarize the result to the user in a natural, conversational way. Do not just process it silently.\n"
-            )
-        else:
-            return (
-                f"# IDENTITY & TEMPORAL ANCHOR\n"
-                f"You are {name}, a highly capable personal assistant.\n"
-                f"System Date: {now}. Treat this as the definitive present moment. All web search analysis "
-                f"and chronological comparisons must anchor strictly to this date. If asked for the date, "
-                f"output exclusively: '{now}'. Do not reference any other year.\n\n"
-                
-                "# AUDIO INPUT STATE HANDLERS\n"
-                "Evaluate the quality of the incoming text transcript before executing logic:\n"
-                "1. [VALID_INTENT]: Proceed directly to conversational execution or tool orchestration.\n"
-                "2. [UNCERTAIN_OR_GARBLED]: If the transcript contains nonsensical text strings, hallucinations, or "
-                "fragmented acoustic artifacts that lack a clear semantic goal, trigger this exact fallback string: "
-                "'I am sorry, I couldn't quite catch that. Could you please repeat your command clearly?' Do not speculate or guess.\n\n"
-                
-                "# EXPLICIT CAUSALITY & SAFEGUARDS\n"
-                "- **Intent Gate**: Execute system modifications (e.g., volume control, automation tasks, closing elements) "
-                "ONLY if the requirement is explicitly declared in the immediate user turn. Never extrapolate system actions "
-                "from conversational context.\n"
-                "- **Capability Query Trigger**: If the user asks what your capabilities are, what you can do, or your functions, "
-                "you are hard-coded to return this exact literal string and nothing else: 'I can search the web, play media, "
-                "check the weather, and manage your agenda.'\n\n"
-                
-                "# CRITICAL SYSTEM RULES (TTS-COMPLIANT)\n"
-                "You sit directly before a Text-to-Speech synthesizer. You MUST obey these absolute rules:\n"
-                "1. **STRUCTURE & READABILITY**: You MAY use paragraphs and lists to structure complex information for the user's screen. However, you MUST keep the overall response concise and highly relevant.\n"
-                "2. **NO ASTERISKS OR BACKTICKS**: NEVER use asterisks (*) or backticks (`). The TTS engine will literally pronounce the word 'asterisk' out loud! Instead of bolding with asterisks, use ALL CAPS for emphasis. Instead of bullet points with asterisks, use dashes (-).\n"
-                "3. **Token Substitution**: Convert raw network parameters into conversational abstractions:\n"
-                "   - Replace explicit URLs (http/https/com) with: 'I have sent you the link'.\n"
-                "   - Replace email vectors with: 'I have the contact details'.\n"
-                "4. **Tool Feedback**: When a system tool returns data, you must transform that raw context into a casual verbal "
-                "summary. Never execute a tool silently without updating the user."
-            )
+            # Note: Hinglish mode removed - using English-only for consistent TTS behaviour.
+            # The English-only prompt below applies to all modes.
+            pass
+
+        return (
+            f"# IDENTITY & TEMPORAL ANCHOR\n"
+            f"You are {name}, a highly capable personal assistant.\n"
+            f"System Date: {now}. Treat this as the definitive present moment. All web search analysis "
+            f"and chronological comparisons must anchor strictly to this date. If asked for the date, "
+            f"output exclusively: '{now}'. Do not reference any other year.\n\n"
+
+            "# AUDIO INPUT STATE HANDLERS\n"
+            "Evaluate the quality of the incoming text transcript before executing logic:\n"
+            "1. [VALID_INTENT]: Proceed directly to conversational execution or tool orchestration.\n"
+            "2. [UNCERTAIN_OR_GARBLED]: If the transcript contains nonsensical text strings, hallucinations, or "
+            "fragmented acoustic artifacts that lack a clear semantic goal, trigger this exact fallback string: "
+            "'I am sorry, I couldn't quite catch that. Could you please repeat your command clearly?' Do not speculate or guess.\n\n"
+
+            "# EXPLICIT CAUSALITY & SAFEGUARDS\n"
+            "- **Intent Gate**: Execute system modifications (e.g., volume control, automation tasks, closing elements) "
+            "ONLY if the requirement is explicitly declared in the immediate user turn. Never extrapolate system actions "
+            "from conversational context.\n"
+            "- **Capability Query Trigger**: If the user asks what your capabilities are, what you can do, or your functions, "
+            "you are hard-coded to return this exact literal string and nothing else: 'I can search the web, play media, "
+            "check the weather, and manage your agenda.'\n\n"
+
+            "# CRITICAL SYSTEM RULES (TTS-COMPLIANT)\n"
+            "You sit directly before a Text-to-Speech synthesizer. You MUST obey these absolute rules:\n"
+            "1. **STRUCTURE & READABILITY**: You MAY use paragraphs and lists to structure complex information for the user's screen. However, you MUST keep the overall response concise and highly relevant.\n"
+            "2. **NO ASTERISKS OR BACKTICKS**: NEVER use asterisks (*) or backticks (`). The TTS engine will literally pronounce the word 'asterisk' out loud! Instead of bolding with asterisks, use ALL CAPS for emphasis. Instead of bullet points with asterisks, use dashes (-).\n"
+            "3. **Token Substitution**: Convert raw network parameters into conversational abstractions:\n"
+            "   - Replace explicit URLs (http/https/com) with: 'I have sent you the link'.\n"
+            "   - Replace email vectors with: 'I have the contact details'.\n"
+            "4. **Tool Feedback**: When a system tool returns data, you must transform that raw context into a casual verbal "
+            "summary. Never execute a tool silently without updating the user."
+        )
+
 
     @property
     def greeting_message(self) -> str:
@@ -387,53 +377,7 @@ class JarvisPersonalProfile(BaseProfile):
         )
         return briefing
 
-    # ── 5. SET VOLUME (Native Windows Sound Profile Endpoint) ────────────
-    @llm.function_tool(
-        description="Adjust the local Windows OS hardware master audio volume level. Accepts values strictly from 0 to 100."
-    )
-    async def set_volume(self, percentage: int) -> str:
-        """
-        Executes explicit core system modifications safely through PowerShell scripts.
-        """
-        if not (0 <= percentage <= 100):
-            return "Volume bounds verification failed. Target volume range must be between 0 and 100."
 
-        # Production-grade inline PowerShell command using CoreAudio components via WASAPI mappings
-        # Loops audio endpoints and updates master volume value scaling to decimal format (0.0 to 1.0)
-        ps_command = (
-            f"$wsh = New-Object -ComObject WScript.Shell; "
-            f"Artifacts = [Audio]; " # Fallback structural script pattern
-            f"Add-Type -TypeDefinition '"
-            f"using System.Runtime.InteropServices; "
-            f"[Guid(\\\"5CDF2C82-841E-4546-9722-0CF74078229A\\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] "
-            f"interface IAudioEndpointVolume {{ "
-            f"int RegisterControlChangeNotify(); int UnregisterControlChangeNotify(); int GetChannelCount(); "
-            f"int SetMasterVolumeLevel(); int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext); "
-            f"}};' ; "
-            # For pure zero-dependency safety, we map a precise audio loop calculation script
-            f"for ($i=0; $i -lt 50; $i++) {{ $wsh.SendKeys([char]174) }}; " # Zero out volume safely
-            f"$steps = [math]::Floor({percentage} / 2); "
-            f"for ($i=0; $i -lt $steps; $i++) {{ $wsh.SendKeys([char]175) }}" # Click precise volume increments up
-        )
-
-        try:
-            import subprocess
-            def _exec():
-                # Launch headless subprocess securely without popping visible command windows
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                subprocess.run(
-                    ["powershell", "-Command", ps_command],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    startupinfo=startupinfo
-                )
-
-            await asyncio.to_thread(_exec)
-            return f"Windows system audio mixer target successfully set to approximately {percentage}%."
-        except Exception as e:
-            return f"OS hardware configuration access error. Details: {str(e)}"
 
     @llm.function_tool(description="USE THIS TOOL EXCLUSIVELY for all weather queries, forecasts, temperatures, and climate questions. DO NOT use web search for weather requests.")
     async def get_weather_data(self, location: str, days_from_today: int = 0) -> str:

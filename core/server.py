@@ -1,8 +1,12 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import random
 import logging
 import json
@@ -10,6 +14,8 @@ import time
 from pathlib import Path
 from livekit import api
 from core.config import settings
+
+limiter = Limiter(key_func=get_remote_address)
 
 # Structured JSON logging
 class JSONFormatter(logging.Formatter):
@@ -32,6 +38,8 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 app = FastAPI(title="Jarvis Token Server")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Allow the frontend Vite server to access the token API locally
 ALLOWED_ORIGINS = [
@@ -64,7 +72,8 @@ class TokenResponse(BaseModel):
     url: str
 
 @app.post("/api/token", response_model=TokenResponse)
-async def get_token(request: TokenRequest):
+@limiter.limit("10/minute")
+async def get_token(request: Request, body: TokenRequest):
     """
     Generates a LiveKit Access Token dynamically for the frontend client.
     Requires a valid password matching JARVIS_UI_PASSWORD.
@@ -72,13 +81,13 @@ async def get_token(request: TokenRequest):
     from fastapi import HTTPException
     
     expected_password = os.getenv("JARVIS_UI_PASSWORD")
-    if not expected_password or request.password != expected_password:
+    if not expected_password or body.password != expected_password:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid UI password")
     # Generating a random participant identity for testing flexibility
     participant_identity = f"user-{random.randint(1000, 9999)}"
     
     # Prefix the room with the requested persona for the backend worker to catch
-    safe_persona = request.persona.lower().strip()
+    safe_persona = body.persona.lower().strip()
     if safe_persona not in ["jarvis", "veronica"]:
         safe_persona = "jarvis"
     dynamic_room_name = f"{safe_persona}-session-{random.randint(1000, 9999)}"
