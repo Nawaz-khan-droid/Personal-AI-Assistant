@@ -578,23 +578,50 @@ class JarvisPersonalProfile(BaseProfile):
             return f"Invalid action. Must be one of {valid_actions}."
         return await asyncio.to_thread(self.sys_ctrl.press_key, action)
 
-    @llm.function_tool(description="Closes a specific window or tab hands-free. Provide a keyword from the window's title (e.g., 'YouTube', 'Chrome'). If the user says 'close this tab', leave window_title empty.")
-    async def close_browser_tab(self, window_title: str = "") -> str:
-        """Closes a specific window/tab by focusing it first, or closes the currently active tab."""
+    @llm.function_tool(description="Closes a specific window or tab hands-free. Provide a keyword from the window's title (e.g., 'YouTube', 'Chrome'). DEFAULT confirmed to False ALWAYS. NEVER set confirmed=True on your own intuition, even if the user says 'please'. You must first receive the SELF_TERMINATION_GATE error, explicitly ask the user 'Are you sure?', and only then set confirmed=True if they answer yes.")
+    async def close_browser_tab(self, window_title: str = "", confirmed: bool = False) -> str:
+        """Closes a specific window/tab by focusing it first, or closes the active tab, using a confirmation gate for self-termination."""
         try:
             import asyncio
             
-            def _close_worker():
+            def _close_worker() -> str:
                 import pyautogui
                 import time
+                import winsound
+                import pygetwindow as gw
+
+                # 1. Heuristically check if we are targeting the JARVIS UI session
+                is_self_target = False
+                active_title = ""
+                
+                try:
+                    active_win = gw.getActiveWindow()
+                    if active_win:
+                        active_title = active_win.title.lower()
+                except Exception:
+                    pass
+
+                # Detect if the explicit title or the active fallback window is JARVIS
+                target_lower = window_title.lower().strip()
+                self_keywords = ["jarvis", "livekit", "localhost", "127.0.0.1"]
+                
+                if target_lower and any(k in target_lower for k in self_keywords):
+                    is_self_target = True
+                elif not window_title and any(k in active_title for k in self_keywords):
+                    is_self_target = True
+
+                # 2. Intercept self-termination if not confirmed
+                if is_self_target and not confirmed:
+                    return "SELF_TERMINATION_GATE: You are attempting to close the active JARVIS interface window. You must abort the keystroke sequence and verbally ask the user: 'Sir, are you certain you want me to close this communication tab and terminate my connection?' Do not set confirmed=True until they say yes."
+
+                # 3. Target explicit window if requested (even if it's our own, now that it's confirmed)
                 if window_title:
                     try:
-                        import pygetwindow as gw
-                        windows = gw.getWindowsWithTitle(window_title)
-                        
+                        all_windows = gw.getAllWindows()
+                        windows = [w for w in all_windows if target_lower in w.title.lower()]
                         if not windows and window_title.lower() in ["browser", "tab"]:
-                            for browser in ["Chrome", "Edge", "Brave", "Firefox"]:
-                                windows = gw.getWindowsWithTitle(browser)
+                            for browser in ["chrome", "edge", "brave", "firefox"]:
+                                windows = [w for w in all_windows if browser in w.title.lower()]
                                 if windows:
                                     break
                                     
@@ -605,7 +632,7 @@ class JarvisPersonalProfile(BaseProfile):
                             try:
                                 win.activate()
                             except Exception:
-                                pass # PyGetWindowException (Error code 0) is common but often still focuses
+                                pass # PyGetWindowException is common
                             
                             time.sleep(0.5)
                             pyautogui.hotkey('ctrl', 'w')
@@ -614,19 +641,18 @@ class JarvisPersonalProfile(BaseProfile):
                             return f"Could not find any open window matching '{window_title}'."
                     except ImportError:
                         pass # Fallback to standard active-window close if pygetwindow is missing
-                        
-                # Fallback: Just close the currently active window (with a short warning beep)
-                import winsound
-                winsound.Beep(1000, 300) # This synchronous beep was previously blocking the WebRTC loop!
+
+                # 4. Fallback Execution (Standard active window tab close)
+                winsound.Beep(1000, 300)
                 time.sleep(1)
                 pyautogui.hotkey('ctrl', 'w')
-                return "Closed the currently active tab."
-                
+                return "Closed the target active tab session successfully."
+
             return await asyncio.to_thread(_close_worker)
         except Exception as e:
             import logging
-            logging.getLogger("jarvis-tools").error(f"Failed to close tab: {e}")
-            return f"Error closing tab: {str(e)}"
+            logging.getLogger("jarvis-tools").error(f"Failed to execute tab closure layout: {e}")
+            return f"Error executing tab closure: {str(e)}"
 
     @llm.function_tool(description="Use this tool to search YouTube. Extract ONLY the clean channel name, artist, or topic for the 'query' parameter. NEVER include words like 'latest', 'newest', or 'video' in the query string. Heuristically correct phonetic mistakes. Set search_type to 'channel_latest' if they want the newest upload from a specific creator.")
     async def search_youtube_media(self, query: str, search_type: str = "general") -> str:
