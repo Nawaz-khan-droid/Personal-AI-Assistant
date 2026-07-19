@@ -95,7 +95,7 @@ class JarvisPersonalProfile(BaseProfile):
             "from conversational context.\n"
             "- **Capability Query Trigger**: If the user asks what your capabilities are, what you can do, or your functions, "
             "you are hard-coded to return this exact literal string and nothing else: 'I can search the web, play media, "
-            "check the weather, and manage your agenda.'\n\n"
+            "check the weather, and manage your agenda.' (NOTE: Do NOT trigger this for identity questions like 'Who are you?' or 'What is your name?').\n\n"
 
             "# CRITICAL SYSTEM RULES (TTS-COMPLIANT)\n"
             "You sit directly before a Text-to-Speech synthesizer. You MUST obey these absolute rules:\n"
