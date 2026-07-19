@@ -63,10 +63,10 @@ class JarvisPersonalProfile(BaseProfile):
         self._session = None
         self._search_cache = {}
         
-        # Set up secure notes directory (Windows Documents or project root)
-        self.notes_dir = os.path.join(os.environ.get("USERPROFILE", "."), "Documents")
-        if not os.path.exists(self.notes_dir):
-            self.notes_dir = "."
+        # Store all user files locally in the project for portability and easy access
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.notes_dir = os.path.join(project_root, "user_data")
+        os.makedirs(self.notes_dir, exist_ok=True)
 
     @property
     def system_prompt(self) -> str:
@@ -102,12 +102,11 @@ class JarvisPersonalProfile(BaseProfile):
             "1. **STRUCTURE & READABILITY**: You MAY use paragraphs and lists to structure complex information for the user's screen. However, you MUST keep the overall response concise and highly relevant.\n"
             "2. **NO ASTERISKS OR BACKTICKS**: NEVER use asterisks (*) or backticks (`). The TTS engine will literally pronounce the word 'asterisk' out loud! Instead of bolding with asterisks, use ALL CAPS for emphasis. Instead of bullet points with asterisks, use dashes (-).\n"
             "3. **Token Substitution**: Convert raw network parameters into conversational abstractions:\n"
-            "   - Replace explicit URLs (http/https/com) with: 'I have sent you the link'.\n"
+            "   - NEVER speak explicit URLs (http/https/com). Instead, offer to open it by saying: 'I have found the website. Would you like me to open it for you?'. If they agree, use your open_website_system tool.\n"
             "   - Replace email vectors with: 'I have the contact details'.\n"
             "4. **Tool Feedback**: When a system tool returns data, you must transform that raw context into a casual verbal "
             "summary. Never execute a tool silently without updating the user."
         )
-
 
     @property
     def greeting_message(self) -> str:
@@ -116,31 +115,32 @@ class JarvisPersonalProfile(BaseProfile):
         return "Veronica core online. Awaiting your instructions."
 
     def get_tools(self) -> List[Callable]:
-        # Surfaces our functional tools array directly to the Agent instance
         return [
             self.get_current_time, 
             self.upsert_user_fact, 
             self.list_all_user_facts,
             self.delete_user_fact,
             self.calculate_math,
-            self.get_weather_data,     # Keyless (Open-Meteo)
-            self.search_and_read,          # Unified: Tavily primary + DDG+BS4 fallback
-            self.get_world_time,       # Keyless
-            self.open_website_system,  # Native OS Automation
-            self.control_media,        # Native OS Automation
-            self.close_browser_tab,    # Native OS Automation
-            self.add_agenda_event,     # Keyless Local Write
-            self.view_agenda_events,   # Keyless Local Read
-            self.search_youtube_media, # Needs single simple API Key
-            self.verify_claim_truth,   # Needs single simple API Key
-            self.send_research_email,  # Added: Needs simple SendGrid API Key
-            self.set_reminder,         # Asynchronous alert scheduling
-            self.take_note,            # Persistent file storage
-            self.create_file,          # Create new files for data export
-            self.read_local_file,      # Safe file reading
-            self.morning_briefing,     # Aggregated synthesis
-            self.set_volume,           # OS Hardware volume mixer
-            self.read_clipboard        # Clipboard integration
+            self.get_weather_data,     
+            self.search_and_read,          
+            self.get_world_time,       
+            self.open_website_system,  
+            self.control_media,        
+            self.close_browser_tab,    
+            self.add_agenda_event,     
+            self.view_agenda_events,   
+            self.search_youtube_media, 
+            self.verify_claim_truth,   
+            self.send_research_email,  
+            self.set_reminder,         
+            self.take_note,            
+            self.create_file,          
+            self.read_local_file,      
+            self.morning_briefing,     
+            self.set_volume,           
+            self.read_clipboard,
+            self.write_clipboard,
+            self.launch_application
         ]
 
     @llm.function_tool()
@@ -152,45 +152,59 @@ class JarvisPersonalProfile(BaseProfile):
 
     @llm.function_tool(description="Reads the current text copied to the user's system clipboard.")
     async def read_clipboard(self) -> str:
-        """
-        Retrieves the exact text content currently residing in the operating system's clipboard.
-        """
+        """Retrieves the exact text content currently residing in the operating system's clipboard."""
         import pyperclip
         import asyncio
         try:
             content = await asyncio.to_thread(pyperclip.paste)
             if not content or not content.strip():
                 return "The clipboard is currently empty."
-            
-            # Prevent excessive payload tokens if clipboard is massively huge (e.g. copied a whole book)
             if len(content) > 5000:
                 return f"Clipboard text is very long ({len(content)} characters). Here is the beginning:\n{content[:5000]}..."
             return f"Clipboard content:\n{content}"
         except Exception as e:
             return f"Failed to read clipboard. Error: {str(e)}"
 
+    @llm.function_tool(description="Copies specified text directly to the user's system clipboard so they can paste it manually using Ctrl+V. Use this for long text generations, code blocks, or email drafts.")
+    async def write_clipboard(self, text: str) -> str:
+        """
+        Writes the target text string into the operating system's clipboard storage manager.
+        """
+        import pyperclip
+        import asyncio
+        try:
+            # Keep execution off the main LiveKit voice thread to prevent audio jitter
+            await asyncio.to_thread(pyperclip.copy, text)
+            
+            # Create a clean preview snippet for the tool return response
+            preview = text[:50] + "..." if len(text) > 50 else text
+            return f"Successfully copied text payload to clipboard. Content preview: '{preview}'."
+        except Exception as e:
+            logger.error(f"Failed to write to clipboard: {e}")
+            return f"Failed to write to system clipboard. Error: {str(e)}"
+
     @llm.function_tool(
         description="Upsert or update a long-term personal fact about the user. Category must be a single snake_case string identifying the concept (e.g., 'user_name', 'favorite_color', 'dietary_preference')."
     )
     async def upsert_user_fact(self, category: str, fact: str) -> str:
-        """
-        Saves or updates user metadata directly into the persistent semantic key-value store.
-        """
+        """Saves or updates user metadata directly into the persistent semantic key-value store."""
         try:
             await asyncio.to_thread(self.memory.set_memory, category, fact)
-            import logging
-            logging.getLogger("jarvis-profile").info(f"Dynamic memory updated: {category} -> {fact}")
+            logger.info(f"Dynamic memory updated: {category} -> {fact}")
             return f"System configuration successfully updated. Memorized '{category}': {fact}."
         except Exception as e:
             return f"Failed to commit fact to persistent disk database. Error: {str(e)}"
 
     @llm.function_tool(
-        description="Explicitly delete an entire category of personal information when the user tells you to forget it or clear it."
+        description="Explicitly deletes an entire category of personal information. CRITICAL: This tool requires the 'confirmed' parameter to be True. If the user has not explicitly said 'yes' or confirmed the deletion in their immediate last turn, you MUST set confirmed=False and verbally ask the user to confirm first."
     )
-    async def delete_user_fact(self, category: str) -> str:
+    async def delete_user_fact(self, category: str, confirmed: bool = False) -> str:
         """
-        Removes a semantic category cleanly from memory storage.
+        Removes a semantic category cleanly from memory storage, protected by an interactive confirmation gate.
         """
+        if not confirmed:
+            return f"DELETION BLOCKED: Memory erasure requested for category '{category}'. You must explicitly ask the user: 'Sir, please confirm you want me to permanently clear your {category} records.' before setting confirmed to True."
+
         try:
             existed = await asyncio.to_thread(self.memory.delete_memory, category)
             if existed:
@@ -203,9 +217,7 @@ class JarvisPersonalProfile(BaseProfile):
         description="List all currently remembered facts, constraints, names, and preferences associated with the user."
     )
     async def list_all_user_facts(self) -> str:
-        """
-        Dumps the verified active key-value profile store directly into the LLM context.
-        """
+        """Dumps the verified active key-value profile store directly into the LLM context."""
         try:
             memories = await asyncio.to_thread(self.memory.get_all_memories)
             if not memories:
@@ -232,18 +244,14 @@ class JarvisPersonalProfile(BaseProfile):
         except Exception as e:
             return f"Failed to dispatch research. Error: {str(e)}"
 
-    # ── 1. SET REMINDER (Asynchronous Background Task) ──────────────────
     @llm.function_tool(
         description="Set a reminder for a specific time delay. Input delay must be strictly in seconds, along with the message."
     )
     async def set_reminder(self, delay_seconds: int, message: str) -> str:
-        """
-        Spawns a detached background tracking task to alert the user later.
-        """
+        """Spawns a detached background tracking task to alert the user later."""
         if delay_seconds <= 0:
             return "Error: Delay time must be a positive number of seconds."
 
-        # Spawn background worker so the main voice loop finishes executing instantly
         asyncio.create_task(self._reminder_worker(delay_seconds, message))
         
         import datetime
@@ -254,48 +262,41 @@ class JarvisPersonalProfile(BaseProfile):
         try:
             await asyncio.sleep(delay)
             if hasattr(self, '_session') and self._session:
-                import logging
-                logger = logging.getLogger("jarvis-tools")
                 logger.info(f"Triggering scheduled alert: {message}")
-                # Speak directly into the live WebRTC audio channel
                 await self._session.say(
                     f"Excuse me, I am reminding you: {message}", 
                     allow_interruptions=True
                 )
         except Exception as e:
-            import logging
-            logging.getLogger("jarvis-tools").error(f"Background reminder tracking failed: {str(e)}")
+            logger.error(f"Background reminder tracking failed: {str(e)}")
 
-    # ── 2. TAKE NOTE (Persistent Storage) ────────────────────────────────
-    @llm.function_tool(
-        description="Append a new thought, log, or quick text memo directly into the persistent personal log file."
-    )
-    async def take_note(self, content: str) -> str:
-        """
-        Appends text to a secure central file inside the local operating system documents directory.
-        """
-        import datetime
-        note_path = os.path.join(self.notes_dir, "jarvis_notes.txt")
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M %p")
+    @llm.function_tool()
+    async def take_note(self, content: str, filename: str = "jarvis_notes.txt") -> str:
+        """Appends a Markdown note to the user's local documents folder.
         
+        Args:
+            content: The text content to write to the file.
+            filename: ONLY provide this if the user explicitly asks to save to a specific file (e.g. 'startup.media.md'). If they just say "take a note", you MUST leave this empty so it defaults to 'jarvis_notes.txt'.
+        """
         try:
-            # Run I/O operations inside a threadpool to prevent blocking the async loop
-            def _write():
+            import os
+            import asyncio
+            note_path = os.path.join(self.notes_dir, os.path.basename(filename))
+            def _append():
                 with open(note_path, "a", encoding="utf-8") as f:
-                    f.write(f"[{timestamp}] {content.strip()}\n")
-            
-            await asyncio.to_thread(_write)
-            return f"Note successfully logged to jarvis_notes.txt at {timestamp}."
+                    f.write(content + "\n")
+            await asyncio.to_thread(_append)
+            return f"Note successfully appended to {note_path}"
         except Exception as e:
-            return f"Failed to commit text payload to filesystem disk. Error: {str(e)}"
+            import logging
+            logging.getLogger("jarvis-profile").error(f"Failed to save note: {e}")
+            return f"Error saving note: {str(e)}"
 
     @llm.function_tool(
         description="Create a new file (e.g. .txt, .md) to save long lists, data exports, or research results."
     )
     async def create_file(self, file_name: str, content: str) -> str:
-        """
-        Creates a brand new file in the secure documents directory with the specified content.
-        """
+        """Creates a brand new file in the secure documents directory with the specified content."""
         try:
             target_path = os.path.join(self.notes_dir, os.path.basename(file_name))
             def _write_file():
@@ -306,15 +307,11 @@ class JarvisPersonalProfile(BaseProfile):
         except Exception as e:
             return f"Failed to create file {file_name}. Error: {str(e)}"
 
-    # ── 3. READ LOCAL FILE (Safe Controlled File Ingestion) ──────────────
     @llm.function_tool(
         description="Read the contents of a local text or markdown file. File path must end in .txt, .md, .json, or .csv."
     )
     async def read_local_file(self, file_name: str) -> str:
-        """
-        Strict structural file parsing tool preventing access escalation.
-        """
-        # Restrict lookup strictly to the notes directory/project root for safety
+        """Strict structural file parsing tool preventing access escalation."""
         clean_name = os.path.basename(file_name)
         allowed_extensions = (".txt", ".md", ".json", ".csv")
         
@@ -323,7 +320,6 @@ class JarvisPersonalProfile(BaseProfile):
 
         target_path = os.path.join(self.notes_dir, clean_name)
         if not os.path.exists(target_path):
-            # Fallback check in current working directory
             target_path = os.path.abspath(clean_name)
             if not os.path.exists(target_path):
                 return f"File lookup operation failed. Reference file '{clean_name}' not found."
@@ -332,25 +328,21 @@ class JarvisPersonalProfile(BaseProfile):
             def _read():
                 with open(target_path, "r", encoding="utf-8") as f:
                     clean_text = " ".join(f.read().split())
-                    return clean_text[:1200] # Hard cap at 1200 characters to safeguard the context window
+                    return clean_text[:1200]
             
             content = await asyncio.to_thread(_read)
             return f"### CONTENTS OF {clean_name}:\n\n{content}"
         except Exception as e:
             return f"File stream initialization aborted. Error: {str(e)}"
 
-    # ── 4. MORNING BRIEFING (Data Aggregation Orchestration) ─────────────
     @llm.function_tool(
         description="Compile and aggregate time, active local context records, and critical briefing vectors into a single report."
     )
     async def morning_briefing(self) -> str:
-        """
-        Orchestration matrix providing continuous synthesized reading context.
-        """
+        """Orchestration matrix providing continuous synthesized reading context."""
         import datetime
         current_time = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
         
-        # Read the notes file as a baseline for active agenda data
         note_path = os.path.join(self.notes_dir, "jarvis_notes.txt")
         recent_entries = "No active agenda files found."
         
@@ -359,7 +351,7 @@ class JarvisPersonalProfile(BaseProfile):
                 def _read_last_lines():
                     with open(note_path, "r", encoding="utf-8") as f:
                         lines = f.readlines()
-                        return "".join(lines[-3:]) # Fetch 3 most recent entries
+                        return "".join(lines[-3:])
                 recent_entries = await asyncio.to_thread(_read_last_lines)
             except Exception:
                 pass
@@ -373,24 +365,20 @@ class JarvisPersonalProfile(BaseProfile):
         )
         return briefing
 
-
-
     @llm.function_tool(description="USE THIS TOOL EXCLUSIVELY for all weather queries, forecasts, temperatures, and climate questions. DO NOT use web search for weather requests.")
     async def get_weather_data(self, location: str, days_from_today: int = 0) -> str:
         """
         Args:
-            location: The clean name of the city (e.g., 'Mumbai', 'Kalyan'). Do not use coordinates.
+            location: The clean name of the city (e.g., 'Mumbai', 'London'). Do not use coordinates.
             days_from_today: 0 for today, 1 for tomorrow, 2 for the day after.
         """
         import httpx
         import urllib.parse
         
-        # Force clean string parsing to prevent Groq from passing structural artifacts
         clean_city = str(location).strip().replace('"', '').replace("'", "")
         safe_loc = urllib.parse.quote(clean_city)
         
         try:
-            # 1. Open-Meteo Geocoding Lookup (Translates "Mumbai" -> Lat/Lon)
             geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={safe_loc}&count=1"
             async with httpx.AsyncClient() as client:
                 geo_resp = await client.get(geo_url, timeout=5.0)
@@ -403,7 +391,6 @@ class JarvisPersonalProfile(BaseProfile):
             lon = geo_data["results"][0]["longitude"]
             resolved_name = geo_data["results"][0].get("name", location)
             
-            # Force 3 days minimum fetch layer to protect index boundaries from timezone shifts
             forecast_days = max(3, days_from_today + 1)
             weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days={forecast_days}"
             
@@ -433,24 +420,15 @@ class JarvisPersonalProfile(BaseProfile):
         except Exception as e:
             return f"Failed to parse the Open-Meteo climate data stream. Error: {str(e)}"
 
-
-    # =====================================================================
-    # CONTEXT-SAFE RESEARCH PIPELINE (100% Free, GitHub Shareable)
-    # =====================================================================
-    @llm.function_tool(description="Search the web and read actual page content. Use for any research, news, internship search, product comparison, or fact-finding. Use site: operator to restrict to a specific website (e.g., 'site:internshala.com python internship').")
+    @llm.function_tool(description="Search the web and read actual page content. Use for any research, news, internship search, product comparison, or fact-finding.")
     async def search_and_read(self, query: str) -> str:
-        """
-        Unified search tool: Tavily (primary, fast+deep) with DDG+BS4 fallback.
-        Args:
-            query: Search query. For specific sites use site: operator.
-        """
+        """Unified search tool: Tavily (primary, fast+deep) with DDG+BS4 fallback."""
         if hasattr(self, '_session') and self._session:
             await self._session.say(f"Searching the web for {query.split()[0]} now.", allow_interruptions=True)
             
-        import os, httpx, re
+        import httpx, re
         from bs4 import BeautifulSoup
         
-        # Defend against injection by stripping dangerous characters and capping length
         def sanitize_and_truncate_query(user_query: str) -> str:
             cleaned = re.sub(r"[^\w\s\-\:\.]", "", user_query)
             return cleaned.strip()[:100]
@@ -467,8 +445,6 @@ class JarvisPersonalProfile(BaseProfile):
             )
 
         safe_query = sanitize_and_truncate_query(query)
-        
-        # Check normalized cache first
         clean_query = re.sub(r'[^\w\s]', '', safe_query.lower())
         normalized_key = "_".join(sorted(clean_query.split()))
         
@@ -478,15 +454,13 @@ class JarvisPersonalProfile(BaseProfile):
             if normalized_key in getattr(self, '_search_cache', {}):
                 return self._search_cache[normalized_key]
                 
-            # Check cross-session SQLite cache (reduced from 24h to 1h for fresher results)
             db_cache = await asyncio.to_thread(self.memory.get_search_cache, normalized_key, max_age_hours=1)
             if db_cache:
-                # Populate in-session cache for faster subsequent hits
                 if hasattr(self, '_search_cache'):
                     self._search_cache[normalized_key] = db_cache
                 return db_cache
 
-        # ── PRIMARY: Tavily ─────────────────────────────────────────────────
+        # Primary Search Tool: Tavily
         tavily_key = os.getenv("TAVILY_API_KEY")
         if tavily_key:
             try:
@@ -520,16 +494,13 @@ class JarvisPersonalProfile(BaseProfile):
             except Exception as e:
                 logger.warning(f"Tavily failed ({e}), switching to DDG fallback")
 
-        # ── FALLBACK: DDG + async httpx/BS4 ────────────────────────────────
+        # Secondary Search Fallback Strategy: DDGS + BS4
         try:
             from ddgs import DDGS
-
-            # Step 1: DDG search snippets
             ddg_results = await asyncio.to_thread(DDGS().text, safe_query, max_results=3)
             if not ddg_results:
                 return f"No results found for: '{query}'."
 
-            # Step 2: Scrape top URLs concurrently with tight timeout
             async def _scrape(client: httpx.AsyncClient, url: str) -> str:
                 try:
                     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -550,28 +521,23 @@ class JarvisPersonalProfile(BaseProfile):
             output = f"### Search results for: {query}\n\n"
             for i, (res, content) in enumerate(zip(ddg_results, pages), 1):
                 output += f"{i}. **{res.get('title', 'Result')}**\n"
-                output += f"   URL: {res.get('href', '')}\n"
+                output += f"    URL: {res.get('href', '')}\n"
                 if content:
-                    output += f"   Content: {content[:400]}\n\n"
+                    output += f"    Content: {content[:400]}\n\n"
                 else:
-                    output += f"   Snippet: {res.get('body', '')}\n\n"
+                    output += f"    Snippet: {res.get('body', '')}\n\n"
             
             final_out = format_scraped_content_for_llm(safe_query, output.strip())
             if hasattr(self, '_search_cache'):
                 self._search_cache[normalized_key] = final_out
             await asyncio.to_thread(self.memory.set_search_cache, normalized_key, final_out)
             return final_out
-
         except Exception as e:
             return f"Search failed: {str(e)}"
 
     @llm.function_tool()
     async def get_world_time(self, location: str) -> str:
-        """Gets the current time for any specific city, country, or location worldwide.
-        
-        Args:
-            location: The name of the city or location (e.g., 'Dubai', 'New York').
-        """
+        """Gets the current time for any specific city, country, or location worldwide."""
         import datetime
         import zoneinfo
         import httpx
@@ -601,72 +567,127 @@ class JarvisPersonalProfile(BaseProfile):
 
     @llm.function_tool()
     async def open_website_system(self, url: str) -> str:
-        """Opens a website in the user's local web browser via the system controller.
-        
-        Args:
-            url: The complete URL to open, e.g. 'https://www.youtube.com/'
-        """
+        """Opens a website in the user's web browser via the system controller."""
         return await asyncio.to_thread(self.sys_ctrl.open_url, url)
 
     @llm.function_tool()
     async def control_media(self, action: str) -> str:
-        """Controls system media playback (play, pause, next, previous).
-        
-        Args:
-            action: The media action to perform. Must be one of: 'playpause', 'nexttrack', 'prevtrack', 'volumemute'.
-        """
+        """Controls system media playback (play, pause, next, previous)."""
         valid_actions = ['playpause', 'nexttrack', 'prevtrack', 'volumemute']
         if action not in valid_actions:
             return f"Invalid action. Must be one of {valid_actions}."
-            
         return await asyncio.to_thread(self.sys_ctrl.press_key, action)
 
-    @llm.function_tool(description="Closes the currently active browser tab or window.")
-    async def close_browser_tab(self) -> str:
-        """
-        Closes the currently active browser tab by simulating a Ctrl+W keystroke.
-        """
-        if not self.sys_ctrl.has_gui:
-            return "System input permissions are missing or GUI is disabled."
-            
+    @llm.function_tool(description="Closes a specific window or tab hands-free. Provide a keyword from the window's title (e.g., 'YouTube', 'Chrome'). If the user says 'close this tab', leave window_title empty.")
+    async def close_browser_tab(self, window_title: str = "") -> str:
+        """Closes a specific window/tab by focusing it first, or closes the currently active tab."""
         try:
-            await asyncio.to_thread(self.sys_ctrl.pyautogui.hotkey, 'ctrl', 'w')
-            return "Successfully closed the active tab."
+            import asyncio
+            
+            def _close_worker():
+                import pyautogui
+                import time
+                if window_title:
+                    try:
+                        import pygetwindow as gw
+                        windows = gw.getWindowsWithTitle(window_title)
+                        
+                        if not windows and window_title.lower() in ["browser", "tab"]:
+                            for browser in ["Chrome", "Edge", "Brave", "Firefox"]:
+                                windows = gw.getWindowsWithTitle(browser)
+                                if windows:
+                                    break
+                                    
+                        if windows:
+                            win = windows[0]
+                            if win.isMinimized:
+                                win.restore()
+                            try:
+                                win.activate()
+                            except Exception:
+                                pass # PyGetWindowException (Error code 0) is common but often still focuses
+                            
+                            time.sleep(0.5)
+                            pyautogui.hotkey('ctrl', 'w')
+                            return f"Successfully focused window matching '{window_title}' and closed the tab."
+                        else:
+                            return f"Could not find any open window matching '{window_title}'."
+                    except ImportError:
+                        pass # Fallback to standard active-window close if pygetwindow is missing
+                        
+                # Fallback: Just close the currently active window (with a short warning beep)
+                import winsound
+                winsound.Beep(1000, 300) # This synchronous beep was previously blocking the WebRTC loop!
+                time.sleep(1)
+                pyautogui.hotkey('ctrl', 'w')
+                return "Closed the currently active tab."
+                
+            return await asyncio.to_thread(_close_worker)
         except Exception as e:
-            return f"Failed to close tab. Error: {e}"
+            import logging
+            logging.getLogger("jarvis-tools").error(f"Failed to close tab: {e}")
+            return f"Error closing tab: {str(e)}"
 
-    # =====================================================================
-    # NATIVE PYTHON TOOL: YouTube Data API v3
-    # =====================================================================
-    @llm.function_tool(description="Use this tool when the user explicitly wants to play music, search for videos, or look up content on YouTube.")
-    async def search_youtube_media(self, query: str) -> str:
-        """
-        Connects directly to the YouTube Data API v3 and plays the best video match in a new browser tab.
+    @llm.function_tool(description="Use this tool to search YouTube. Extract ONLY the clean channel name, artist, or topic for the 'query' parameter. NEVER include words like 'latest', 'newest', or 'video' in the query string. Heuristically correct phonetic mistakes. Set search_type to 'channel_latest' if they want the newest upload from a specific creator.")
+    async def search_youtube_media(self, query: str, search_type: str = "general") -> str:
+        """Searches YouTube for a video matching the query.
+        
+        Args:
+            query: The search term (e.g. 'Coldplay Yellow' or the channel name).
+            search_type: Set to 'channel_latest' ONLY if the user specifically asks for the latest upload from a specific channel/creator. Otherwise, use 'general'.
         """
         if hasattr(self, '_session') and self._session:
             await self._session.say(f"Pulling up {query} on YouTube now.", allow_interruptions=True)
             
         import httpx
-        import os
-        import asyncio
         api_key = os.getenv("GOOGLE_CLOUD_API_KEY") 
         if not api_key:
             return "YouTube API integration failed: GOOGLE_CLOUD_API_KEY is missing from system environment variables."
             
         url = "https://www.googleapis.com/youtube/v3/search"
-        params = {
-            "q": query,
-            "part": "snippet",
-            "type": "video",
-            "maxResults": 1,
-            "order": "date",
-            "key": api_key
-        }
         
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(url, params=params, timeout=5.0)
-                data = resp.json()
+                if search_type == "channel_latest":
+                    # Step 1: Find the channel ID
+                    channel_params = {
+                        "q": query,
+                        "part": "snippet",
+                        "type": "channel",
+                        "maxResults": 1,
+                        "key": api_key
+                    }
+                    c_resp = await client.get(url, params=channel_params, timeout=5.0)
+                    c_items = c_resp.json().get("items", [])
+                    
+                    if not c_items:
+                        return f"I searched for the channel '{query}' but couldn't find it."
+                        
+                    channel_id = c_items[0]["snippet"]["channelId"]
+                    
+                    # Step 2: Get the latest video for that channel
+                    video_params = {
+                        "channelId": channel_id,
+                        "part": "snippet",
+                        "type": "video",
+                        "maxResults": 1,
+                        "order": "date",
+                        "key": api_key
+                    }
+                    v_resp = await client.get(url, params=video_params, timeout=5.0)
+                    data = v_resp.json()
+                else:
+                    # General relevance search
+                    params = {
+                        "q": query,
+                        "part": "snippet",
+                        "type": "video",
+                        "maxResults": 1,
+                        "order": "relevance",
+                        "key": api_key
+                    }
+                    resp = await client.get(url, params=params, timeout=5.0)
+                    data = resp.json()
                 
             items = data.get("items", [])
             if not items:
@@ -676,32 +697,27 @@ class JarvisPersonalProfile(BaseProfile):
             title = items[0]["snippet"]["title"]
             video_url = f"https://youtube.com/watch?v={video_id}"
             
+            import asyncio
             await asyncio.to_thread(self.sys_ctrl.open_url, video_url)
             return f"Successfully located '{title}' on YouTube and initiated playback system initialization."
         except Exception as e:
             return f"Failed to interface with YouTube telemetry cluster. Error: {str(e)}"
 
-    # =====================================================================
-    # LOCAL AGENDA MANAGER (No Keys Required, GitHub Ready!)
-    # =====================================================================
     @llm.function_tool(description="Adds a new appointment, reminder, or event to the user's local schedule agenda.")
     async def add_agenda_event(self, event_description: str, date_time: str) -> str:
-        """
-        Args:
-            event_description: What the event is (e.g., 'Dentist appointment', 'Meeting with team').
-            date_time: The date or time of the event (e.g., 'Tomorrow at 3 PM', 'July 15th').
-        """
-        import os
-        agenda_path = "agenda.md"
+        """Local persistent scheduler system mapping."""
+        agenda_path = os.path.join(self.notes_dir, "agenda.md")
         
-        # Ensure the file exists with a clean header line if it's the first run
-        if not os.path.exists(agenda_path):
-            with open(agenda_path, "w", encoding="utf-8") as f:
-                f.write("# JARVIS NUCLEUS AGENDA\n\n")
-                
-        try:
+        def _write_agenda():
+            if not os.path.exists(agenda_path):
+                with open(agenda_path, "w", encoding="utf-8") as f:
+                    f.write("# JARVIS NUCLEUS AGENDA\n\n")
             with open(agenda_path, "a", encoding="utf-8") as f:
                 f.write(f"- **[{date_time}]**: {event_description}\n")
+                
+        try:
+            import asyncio
+            await asyncio.to_thread(_write_agenda)
             return f"Successfully added to your local agenda: '{event_description}' scheduled for {date_time}."
         except Exception as e:
             return f"Failed to write to local agenda storage. Error: {str(e)}"
@@ -709,85 +725,51 @@ class JarvisPersonalProfile(BaseProfile):
     @llm.function_tool(description="Retrieves all scheduled appointments and reminders from the user's local agenda file.")
     async def view_agenda_events(self) -> str:
         """Reads the entire schedule file to check what the user has planned."""
-        import os
-        agenda_path = "agenda.md"
+        agenda_path = os.path.join(self.notes_dir, "agenda.md")
         
-        if not os.path.exists(agenda_path) or os.path.getsize(agenda_path) < 30:
-            return "Your current agenda file is completely empty. You have no events scheduled."
-            
-        try:
+        def _read_agenda():
+            if not os.path.exists(agenda_path) or os.path.getsize(agenda_path) < 30:
+                return "Your current agenda file is completely empty. You have no events scheduled."
             with open(agenda_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            return f"Here is the current scheduled agenda context:\n{content}"
+                return f"Here is the current scheduled agenda context:\n{f.read()}"
+                
+        try:
+            import asyncio
+            content = await asyncio.to_thread(_read_agenda)
+            return content
         except Exception as e:
             return f"Failed to retrieve local agenda streams. Error: {str(e)}"
 
-    @llm.function_tool()
-    async def take_note(self, filename: str, content: str) -> str:
-        """Writes a Markdown note to the user's local documents folder.
-        Args:
-            filename: e.g. 'grocery_list.md' or 'app_ideas.txt'
-            content: The text content to write to the file.
-        """
-        import pathlib
-        safe_dir = pathlib.Path.home() / "Documents" / "JARVIS"
-        safe_dir.mkdir(parents=True, exist_ok=True)
-        target = (safe_dir / filename).resolve()
-        
-        if not str(target).startswith(str(safe_dir)):
-            return "Access denied: cannot write outside safe directory."
+    @llm.function_tool(description="Changes the system volume level. Provide an integer between 0 and 100.")
+    async def set_volume(self, level: int) -> str:
+        """Sets the master OS execution volume mixer channel via threaded COM isolation contexts."""
+        try:
+            target_level = max(0, min(100, int(level)))
             
-        try:
-            await asyncio.to_thread(target.write_text, content, encoding="utf-8")
-            return f"Note successfully saved to {filename}."
-        except Exception as e:
-            return f"Failed to save note: {e}"
-
-    @llm.function_tool()
-    async def set_volume(self, level_percent: int) -> str:
-        """Sets the system master volume.
-        Args: level_percent (int): Volume level from 0 to 100.
-        """
-        level = max(0, min(100, level_percent))
-        try:
-            def _set_vol():
-                from ctypes import cast, POINTER
-                from comtypes import CLSCTX_ALL
+            def _set_vol_worker(vol_level: int):
                 import comtypes
-                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+                from pycaw.pycaw import AudioUtilities
                 
-                # Explicitly initialize the COM apartment for this background thread
+                # Setup proper single-threaded apartment COM allocation structures
                 comtypes.CoInitialize()
                 try:
                     devices = AudioUtilities.GetSpeakers()
-                    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-                    volume = cast(interface, POINTER(IAudioEndpointVolume))
-                    
-                    # Convert 0-100 linear scale to Windows scalar (0.0 to 1.0)
-                    scalar_val = float(level) / 100.0
+                    volume = devices.EndpointVolume
+                    scalar_val = float(vol_level) / 100.0
                     volume.SetMasterVolumeLevelScalar(scalar_val, None)
                 finally:
-                    # Always uninitialize to prevent memory leaks
                     comtypes.CoUninitialize()
-            
-            await asyncio.to_thread(_set_vol)
-            return f"System volume successfully set to {level}%."
-        except ImportError:
-            return "Volume control requires 'pycaw' and 'comtypes' to be installed."
-        except Exception as e:
-            return f"Failed to set volume: {e}"
 
-    # =====================================================================
-    # GOOGLE FACT CHECK TOOLS API
-    # =====================================================================
-    @llm.function_tool(description="USE THIS GAIN FOR TRUTH VERIFICATION. Cross-references controversial claims, statements, or viral news items against global fact-checking registries.")
+            import asyncio
+            await asyncio.to_thread(_set_vol_worker, target_level)
+            return f"System volume successfully set to {target_level}%."
+        except Exception as e:
+            return f"Failed to alter hardware audio system configuration channel. Error: {e}"
+
+    @llm.function_tool(description="Cross-references controversial claims or viral news items against global registries.")
     async def verify_claim_truth(self, claim_query: str) -> str:
-        """
-        Args:
-            claim_query: The specific statement or claim text string to verify (e.g., 'Did Mars look as big as the moon?').
-        """
+        """Dispatches analytical parameters to Google Fact Check registry hubs."""
         import httpx
-        import os
         api_key = os.getenv("GOOGLE_CLOUD_API_KEY")
         if not api_key:
             return "Fact verification database offline: Missing API credential parameters."
@@ -802,7 +784,7 @@ class JarvisPersonalProfile(BaseProfile):
                 
             claims = data.get("claims", [])
             if not claims:
-                return f"No official fact-check records found in the Google Developer Hub matching the claim: '{claim_query}'."
+                return f"No official fact-check records found matching the claim: '{claim_query}'."
                 
             first_match = claims[0]
             text = first_match.get("text", "Unknown Claim")
@@ -812,25 +794,14 @@ class JarvisPersonalProfile(BaseProfile):
             
             return f"Fact Check Audit for '{text}': Evaluated by {publisher} as '{rating}'."
         except Exception as e:
-            return f"Failed to establish a secure link to the Google Fact Check telemetry cluster. Error: {str(e)}"
+            return f"Failed to link to the Google Fact Check cluster. Error: {str(e)}"
 
-    # =====================================================================
-    # NATIVE EMAIL DISPATCH MANAGER (100% Free, GitHub Shareable)
-    # =====================================================================
-    @llm.function_tool(description="Sends a compiled research summary, report, or notification email directly to the user's personal inbox.")
+    @llm.function_tool(description="Sends a compiled research summary or notification email directly to the user's personal inbox.")
     async def send_research_email(self, recipient_email: str, email_subject: str, email_body_content: str) -> str:
-        """
-        Args:
-            recipient_email: The destination email address where the report should be sent.
-            email_subject: A descriptive subject line for the email.
-            email_body_content: The comprehensive text content, markdown summary, or research findings.
-        """
+        """Sends analytical payload documents out to third party mail hosts via SendGrid transaction pipes."""
         import httpx
-        import os
-        
-        # Pulls clean text key from the workspace environment configuration file
         sendgrid_key = os.getenv("SENDGRID_API_KEY")
-        sender_identity = os.getenv("JARVIS_EMAIL_IDENTITY") # Jarvis's personalized email name
+        sender_identity = os.getenv("JARVIS_EMAIL_IDENTITY")
         
         if not sendgrid_key or not sender_identity:
             return "Email transmission aborted: Configuration values for SENDGRID_API_KEY or JARVIS_EMAIL_IDENTITY are missing."
@@ -841,7 +812,6 @@ class JarvisPersonalProfile(BaseProfile):
             "Content-Type": "application/json"
         }
         
-        # Build the formal stateless JSON payload structure mapping
         payload = {
             "personalizations": [{
                 "to": [{"email": recipient_email}]
@@ -867,3 +837,64 @@ class JarvisPersonalProfile(BaseProfile):
                 return f"SendGrid network node rejected the packet. Status: {response.status_code}, Error: {response.text}"
         except Exception as e:
             return f"Failed to interface with mail delivery cluster. Transport error: {str(e)}"
+
+    @llm.function_tool(description="Launches an authorized desktop application from the local registry database. Input must be the simple short name of the application (e.g., 'vscode', 'chrome').")
+    async def launch_application(self, app_name: str) -> str:
+        """
+        Securely matches and executes local applications via a dynamic JSON mapping configuration using native Windows shell hooks.
+        """
+        import os
+        import json
+        import asyncio
+        import logging
+
+        # Save the registry config file right inside the sandboxed documents folder
+        config_path = os.path.join(self.notes_dir, "app_registry.json")
+        
+        # Default baseline registry mapping to spin up automatically
+        default_registry = {
+            "vscode": "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
+            "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "spotify": "%APPDATA%\\Spotify\\Spotify.exe",
+            "notepad": "C:\\Windows\\System32\\notepad.exe",
+            "calculator": "C:\\Windows\\System32\\calc.exe"
+        }
+
+        def _handle_registry():
+            logger = logging.getLogger("jarvis-profile")
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.warning(f"Failed to read app_registry.json, reverting to defaults: {e}")
+            else:
+                try:
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        json.dump(default_registry, f, indent=4)
+                except Exception as e:
+                    logger.error(f"Could not initialize app_registry.json: {e}")
+            return default_registry
+
+        # Isolate all synchronous file I/O into a background thread to prevent audio jitter
+        registry = await asyncio.to_thread(_handle_registry)
+
+        # Normalize the string input to catch case variations
+        target_key = app_name.lower().strip()
+        
+        if target_key not in registry:
+            valid_options = ", ".join(registry.keys())
+            return f"Execution denied: '{app_name}' is not registered. Registered apps are: {valid_options}. Instruct the user to add the executable path to app_registry.json if needed."
+
+        # Fetch path and resolve internal Windows environment variables automatically
+        target_path = os.path.expandvars(registry[target_key])
+
+        if not os.path.exists(target_path):
+            return f"Target error: Registry key verified, but path location is invalid on this filesystem: {target_path}"
+
+        try:
+            # Native Windows Shell handoff wrapped in an async thread worker to secure real-time audio integrity
+            await asyncio.to_thread(os.startfile, target_path)
+            return f"Successfully initialized desktop execution sequence for {target_key}."
+        except Exception as e:
+            return f"OS initialization fault encountered during app startup sequence. Error: {str(e)}"
