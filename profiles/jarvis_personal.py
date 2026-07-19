@@ -70,14 +70,16 @@ class JarvisPersonalProfile(BaseProfile):
 
     @property
     def system_prompt(self) -> str:
-        name = "JARVIS" if self.persona == "jarvis" else "VERONICA"
         import datetime
         now = datetime.datetime.now().strftime("%B %d, %Y (%A)")
-        
+        if self.persona == "jarvis":
+            identity_traits = "You are JARVIS, a highly capable, formal, and polite personal assistant (like a digital butler). You refer to the user as 'Sir'. You are highly analytical, professional, and slightly dry."
+        else:
+            identity_traits = "You are VERONICA, a highly capable, tactical, and sharp personal assistant. You are more direct and slightly assertive compared to Jarvis. You prioritize speed and efficiency in your answers."
 
         return (
             f"# IDENTITY & TEMPORAL ANCHOR\n"
-            f"You are {name}, a highly capable personal assistant.\n"
+            f"{identity_traits}\n"
             f"System Date: {now}. Treat this as the definitive present moment. All web search analysis "
             f"and chronological comparisons must anchor strictly to this date. If asked for the date, "
             f"output exclusively: '{now}'. Do not reference any other year.\n\n"
